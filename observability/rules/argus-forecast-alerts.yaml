@@ -1,0 +1,41 @@
+# Predictive capacity alerts driven by the Prophet forecaster.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: argus-forecast-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: argus.forecast
+      rules:
+        - alert: CapacityExhaustionForecast
+          expr: aiops_forecast_hours_to_threshold < 12 > 0
+          for: 15m
+          labels:
+            severity: warning
+            source: argus-forecast
+          annotations:
+            summary: "{{ $labels.resource }} on {{ $labels.instance }} forecast to exceed 80% in {{ $value | printf \"%.1f\" }}h"
+            description: "Prophet forecast predicts {{ $labels.resource }} crosses the 80% threshold within {{ $value | printf \"%.1f\" }} hours. Plan capacity or scale now."
+
+        - alert: CapacityExhaustionImminent
+          expr: aiops_forecast_hours_to_threshold < 2 > 0
+          for: 5m
+          labels:
+            severity: critical
+            source: argus-forecast
+          annotations:
+            summary: "{{ $labels.resource }} on {{ $labels.instance }} exceeds 80% within 2h"
+
+    - name: argus.forecast.meta
+      rules:
+        - alert: ForecasterNotRunning
+          expr: time() - aiops_forecaster_last_run_timestamp > 3600
+          for: 10m
+          labels:
+            severity: warning
+            source: argus-meta
+          annotations:
+            summary: "capacity-forecaster has not completed a loop in 1h"

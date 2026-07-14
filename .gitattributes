@@ -1,0 +1,10 @@
+# Normalize line endings: everything text is LF in the repo and on checkout.
+# Prevents Windows CRLF drift from breaking Makefiles and shell scripts.
+* text=auto eol=lf
+Makefile text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.tf text eol=lf
+*.md text eol=lf

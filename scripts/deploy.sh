@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 1 deploy: observability stack, demo app, chaos tooling.
+# Deploys: observability stack, demo app, chaos tooling, Argus platform services.
 # Idempotent — safe to re-run. Works on EKS and kind (current kube context).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -41,10 +41,16 @@ helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
 echo ">>> Argus recording & alerting rules..."
 kubectl apply -f observability/rules/
 
-echo ">>> Argus platform (MLflow + anomaly detector)..."
+echo ">>> Argus platform (MLflow, detector, forecaster, correlator)..."
 # service code rides in ConfigMaps until Phase 5 CI/CD builds real images
 kubectl -n aiops create configmap argus-detector-code \
   --from-file=services/anomaly-detector/ \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n aiops create configmap argus-forecaster-code \
+  --from-file=services/capacity-forecaster/ \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n aiops create configmap argus-correlator-code \
+  --from-file=services/alert-correlator/ \
   --dry-run=client -o yaml | kubectl apply -f -
 
 EXTRA_ARGS=""
@@ -63,13 +69,13 @@ fi
 helm upgrade --install argus helm/platform \
   --namespace aiops \
   $EXTRA_ARGS \
-  --wait --timeout 8m
+  --wait --timeout 10m
 
 echo ""
 echo ">>> Done. Useful commands:"
 echo "  kubectl -n boutique get pods                     # demo app status"
 echo "  kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80"
 echo "      → http://localhost:3000  (admin / argus-admin)"
-echo "  kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090"
-echo "  make load                                        # start background traffic"
+echo "  make load / make load-varied                     # background traffic"
 echo "  make chaos-cpu                                   # inject a CPU stress fault"
+echo "  make forecasts / make incidents                  # Phase 3 outputs"

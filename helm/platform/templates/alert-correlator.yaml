@@ -1,0 +1,68 @@
+{{- if .Values.alertCorrelator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-correlator
+  namespace: aiops
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: alert-correlator }
+  template:
+    metadata:
+      labels: { app: alert-correlator }
+    spec:
+      containers:
+        - name: correlator
+          image: {{ .Values.alertCorrelator.image }}
+          command: ["bash", "-c"]
+          args:
+            - pip install --quiet -r /app/requirements.txt && uvicorn main:app --app-dir /app --host 0.0.0.0 --port 8080
+          env:
+            - name: CORRELATION_WINDOW_SECONDS
+              value: {{ .Values.alertCorrelator.windowSeconds | quote }}
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          resources:
+            requests: { cpu: 50m, memory: 150Mi }
+            limits: { memory: 300Mi }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+      volumes:
+        - name: code
+          configMap:
+            name: argus-correlator-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-correlator
+  namespace: aiops
+  labels: { app: alert-correlator }
+spec:
+  selector: { app: alert-correlator }
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: alert-correlator
+  namespace: aiops
+spec:
+  selector:
+    matchLabels: { app: alert-correlator }
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      honorLabels: true
+{{- end }}

@@ -1,11 +1,11 @@
-.PHONY: help up down plan kubeconfig kind-up kind-down deploy load load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana train mlflow detector-logs scores demo lint fmt
+.PHONY: help up down plan kubeconfig kind-up kind-down deploy load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana train mlflow detector-logs forecaster-logs forecasts incidents scores demo lint fmt
 
 AWS_PROFILE ?= argus
 TF_DIR      := terraform/aws
 TF          := terraform -chdir=$(TF_DIR)
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
 
 ## ----- AWS (EKS) -----
 
@@ -41,9 +41,9 @@ kind-up: ## Create local 3-node kind cluster (free dev loop)
 kind-down: ## Delete the local kind cluster
 	kind delete cluster --name argus
 
-## ----- Platform (Phase 1+) -----
+## ----- Platform -----
 
-deploy: ## Deploy observability stack, demo app, chaos tooling to current kube context
+deploy: ## Deploy observability, demo app, chaos tooling, Argus services
 	bash scripts/deploy.sh
 
 load: ## Start background k6 traffic (2h steady baseline)
@@ -76,7 +76,7 @@ chaos-clean: ## Remove all chaos experiments
 grafana: ## Port-forward Grafana to http://localhost:3000
 	kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
 
-## ----- ML (Phase 2+) -----
+## ----- ML -----
 
 train: ## Train anomaly models on recent Prometheus data, register in MLflow
 	kubectl -n aiops create configmap argus-training-code --from-file=ml/training/train_anomaly.py \
@@ -92,6 +92,15 @@ mlflow: ## Port-forward MLflow UI to http://localhost:5000
 
 detector-logs: ## Tail the anomaly-detector logs
 	kubectl -n aiops logs deploy/anomaly-detector -f --tail=50
+
+forecaster-logs: ## Tail the capacity-forecaster logs
+	kubectl -n aiops logs deploy/capacity-forecaster -f --tail=50
+
+forecasts: ## Show current capacity forecasts
+	kubectl -n aiops exec deploy/capacity-forecaster -- python -c "import requests;print(requests.get('http://localhost:8080/forecasts').text)"
+
+incidents: ## Show correlated incidents
+	kubectl -n aiops exec deploy/alert-correlator -- python -c "import requests;print(requests.get('http://localhost:8080/incidents').text)"
 
 scores: ## Show current anomaly scores
 	kubectl -n aiops exec deploy/anomaly-detector -- python -c "import requests;print(requests.get('http://localhost:8080/scores').text)"
