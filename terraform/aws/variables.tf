@@ -45,4 +45,7 @@ variable "node_min_size" {
   default = 1
 }
 
-variable 
+variable "node_max_size" {
+  type    = number
+  default = 4
+}
