@@ -51,7 +51,8 @@ spec:
                 {{- else }}
                 --artifacts-destination /data/mlartifacts \
                 {{- end }}
-                --host 0.0.0.0 --port 5000
+                --host 0.0.0.0 --port 5000 \
+                --workers 2
           env:
             - name: AWS_REGION
               value: {{ .Values.awsRegion }}
@@ -61,8 +62,8 @@ spec:
             - name: data
               mountPath: /data
           resources:
-            requests: { cpu: 100m, memory: 350Mi }
-            limits: { memory: 700Mi }
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 1200Mi }
           readinessProbe:
             httpGet: { path: /health, port: 5000 }
             initialDelaySeconds: 30
