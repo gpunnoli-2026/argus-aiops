@@ -1,16 +1,17 @@
-.PHONY: up down deploy demo lint
+.PHONY: help up down plan kubeconfig kind-up kind-down deploy demo lint fmt
 
-up:        ## Provision EKS and deploy the platform (Phase 0+)
-	@echo "TODO(Phase 0): terraform apply + helm install"
+AWS_PROFILE ?= argus
+TF_DIR      := terraform/aws
+TF          := terraform -chdir=$(TF_DIR)
 
-down:      ## Tear down all cloud resources — ALWAYS run after a session
-	@echo "TODO(Phase 0): terraform destroy"
+help: ## Show available targets
+	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
-deploy:    ## Deploy/upgrade platform charts to current kube context
-	@echo "TODO(Phase 0): helm upgrade --install"
+## ----- AWS (EKS) -----
 
-demo:      ## Inject a chaos fault and watch the incident flow
-	@echo "TODO(Phase 4): chaos run + demo script"
-
-lint:
-	ruff check services/ ml/
+up: ## Provision VPC + EKS + S3 and configure kubectl (~15 min)
+	$(TF) init -upgrade
+	$(TF) apply -auto-approve
+	$(MAKE) kubeconfig
+	@echo ""
+	@echo ">>> Cluster up. REMEMBER: 'make down' when you stop 

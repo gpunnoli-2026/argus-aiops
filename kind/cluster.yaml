@@ -1,0 +1,9 @@
+# Local dev cluster — free iteration loop, same Helm charts as EKS.
+# Usage: make kind-up
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: argus
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
