@@ -4,6 +4,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Git Bash / MSYS on Windows rewrites Unix-style path arguments (e.g. helm --set
+# socketPath=/run/...) into C:/Program Files/Git/... — disable that conversion.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 echo ">>> Adding helm repos..."
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null
 helm repo add chaos-mesh https://charts.chaos-mesh.org >/dev/null
@@ -29,6 +34,7 @@ helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
   --namespace chaos \
   --set chaosDaemon.runtime=containerd \
   --set chaosDaemon.socketPath=/run/containerd/containerd.sock \
+  --set controllerManager.replicaCount=1 \
   --set dashboard.create=true \
   --wait --timeout 5m
 
@@ -40,6 +46,4 @@ echo ">>> Done. Useful commands:"
 echo "  kubectl -n boutique get pods                     # demo app status"
 echo "  kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80"
 echo "      → http://localhost:3000  (admin / argus-admin)"
-echo "  kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090"
-echo "  make load                                        # start background traffic"
-echo "  make chaos-cpu                                   # inject a CPU stress fault"
+ech
