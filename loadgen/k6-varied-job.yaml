@@ -1,0 +1,25 @@
+# Multi-regime traffic for model v2 training. Start: make load-varied
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-varied
+  namespace: loadgen
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:0.57.0
+          args: ["run", "/scripts/varied.js"]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-scenarios

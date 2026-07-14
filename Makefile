@@ -52,8 +52,14 @@ load: ## Start background k6 traffic (2h steady baseline)
 	kubectl -n loadgen delete job k6-steady --ignore-not-found
 	kubectl apply -f loadgen/k6-steady-job.yaml
 
+load-varied: ## Start 2.5h multi-regime traffic (idle/ramp/steady/spike) — for model v2 training
+	kubectl -n loadgen create configmap k6-scenarios --from-file=loadgen/scenarios/ \
+		--dry-run=client -o yaml | kubectl apply -f -
+	kubectl -n loadgen delete job k6-varied --ignore-not-found
+	kubectl apply -f loadgen/k6-varied-job.yaml
+
 load-stop: ## Stop background traffic
-	kubectl -n loadgen delete job k6-steady --ignore-not-found
+	kubectl -n loadgen delete job k6-steady k6-varied --ignore-not-found
 
 chaos-cpu: ## Inject 5m CPU stress on cartservice
 	kubectl apply -f chaos/cpu-stress.yaml
