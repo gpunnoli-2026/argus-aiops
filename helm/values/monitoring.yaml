@@ -1,0 +1,37 @@
+# kube-prometheus-stack values — sized for a small 2-4 node sandbox cluster
+grafana:
+  adminPassword: argus-admin # sandbox only; rotate if cluster is ever long-lived
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    resources:
+      requests: { cpu: 200m, memory: 750Mi }
+      limits: { memory: 1500Mi }
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp2
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+    # Pick up PrometheusRule/ServiceMonitor resources from any namespace
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 25m, memory: 64Mi }
+      limits: { memory: 128Mi }
+  # Phase 4 will add the webhook receiver for alert-correlator here
+
+# Trim components we don't need in a sandbox
+kubeEtcd: { enabled: false }
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }

@@ -1,0 +1,31 @@
+# Background traffic generator. Start: make load  Stop: make load-stop
+# (the k6-scenarios ConfigMap is created by 'make load' from loadgen/scenarios/)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-steady
+  namespace: loadgen
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:0.57.0
+          args: ["run", "/scripts/steady.js"]
+          env:
+            - name: DURATION
+              value: "120m"
+            - name: VUS
+              value: "10"
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-scenarios

@@ -1,0 +1,14 @@
+# Kill one recommendation-service pod — tests restart detection.
+# Run: make chaos-podkill
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-recommendation
+  namespace: chaos
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [boutique]
+    labelSelectors:
+      app: recommendationservice

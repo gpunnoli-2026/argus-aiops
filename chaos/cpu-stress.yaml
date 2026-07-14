@@ -1,0 +1,18 @@
+# CPU stress on the cart service — a classic "service degrading" scenario.
+# Run: make chaos-cpu   (auto-expires after 5m)
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-cartservice
+  namespace: chaos
+spec:
+  mode: all
+  selector:
+    namespaces: [boutique]
+    labelSelectors:
+      app: cartservice
+  stressors:
+    cpu:
+      workers: 2
+      load: 90
+  duration: 5m

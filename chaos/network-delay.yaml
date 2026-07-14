@@ -1,0 +1,18 @@
+# Inject 500ms latency into product catalog — tests latency anomaly detection.
+# Run: make chaos-latency   (auto-expires after 5m)
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: delay-productcatalog
+  namespace: chaos
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [boutique]
+    labelSelectors:
+      app: productcatalogservice
+  delay:
+    latency: 500ms
+    jitter: 100ms
+  duration: 5m

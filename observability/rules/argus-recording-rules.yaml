@@ -1,0 +1,59 @@
+# Argus feature-source recording rules.
+# These series (aiops:svc:*) are the SINGLE definition of ML features —
+# training pipelines and inference services both read them, eliminating
+# train/serve skew (see docs/architecture.md §2.3).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: argus-recording-rules
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: argus.features
+      interval: 30s
+      rules:
+        - record: aiops:svc:cpu_rate
+          expr: |
+            sum by (namespace, pod_owner) (
+              label_replace(rate(container_cpu_usage_seconds_total{namespace="boutique", container!=""}[5m]),
+                "pod_owner", "$1", "pod", "^(.*)-[a-z0-9]+-[a-z0-9]+$")
+            )
+        - record: aiops:svc:mem_ws_bytes
+          expr: |
+            sum by (namespace, pod_owner) (
+              label_replace(container_memory_working_set_bytes{namespace="boutique", container!=""},
+                "pod_owner", "$1", "pod", "^(.*)-[a-z0-9]+-[a-z0-9]+$")
+            )
+        - record: aiops:svc:restarts_delta
+          expr: |
+            sum by (namespace, pod_owner) (
+              label_replace(increase(kube_pod_container_status_restarts_total{namespace="boutique"}[5m]),
+                "pod_owner", "$1", "pod", "^(.*)-[a-z0-9]+-[a-z0-9]+$")
+            )
+        - record: aiops:svc:pods_not_ready
+          expr: |
+            sum by (namespace, pod_owner) (
+              label_replace(kube_pod_status_ready{namespace="boutique", condition="false"},
+                "pod_owner", "$1", "pod", "^(.*)-[a-z0-9]+-[a-z0-9]+$")
+            )
+
+    - name: argus.alerts
+      rules:
+        - alert: BoutiquePodRestarting
+          expr: aiops:svc:restarts_delta > 2
+          for: 2m
+          labels:
+            severity: warning
+            source: argus-static
+          annotations:
+            summary: "{{ $labels.pod_owner }} restarting repeatedly"
+        - alert: BoutiquePodsNotReady
+          expr: aiops:svc:pods_not_ready > 0
+          for: 5m
+          labels:
+            severity: warning
+            source: argus-static
+          annotations:
+            summary: "{{ $labels.pod_owner }} has pods not ready for 5m"
