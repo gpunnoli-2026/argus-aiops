@@ -1,0 +1,50 @@
+# Alerts driven by the ML anomaly scores + detector meta-monitoring.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: argus-ml-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: argus.ml
+      rules:
+        - alert: ServiceAnomalyDetected
+          expr: aiops_anomaly_score > 0.8
+          for: 2m
+          labels:
+            severity: warning
+            source: argus-ml
+          annotations:
+            summary: "ML anomaly on {{ $labels.service }} (score {{ $value | printf \"%.2f\" }})"
+            description: "The anomaly model has scored {{ $labels.service }} above 0.8 for 2 minutes."
+
+        - alert: ServiceAnomalyCritical
+          expr: aiops_anomaly_score > 0.95
+          for: 1m
+          labels:
+            severity: critical
+            source: argus-ml
+          annotations:
+            summary: "Severe ML anomaly on {{ $labels.service }} (score {{ $value | printf \"%.2f\" }})"
+
+    - name: argus.ml.meta
+      rules:
+        - alert: DetectorNotScoring
+          expr: time() - aiops_detector_last_run_timestamp > 300
+          for: 5m
+          labels:
+            severity: warning
+            source: argus-meta
+          annotations:
+            summary: "anomaly-detector has not completed a scoring loop in 5m"
+
+        - alert: DetectorModelMissing
+          expr: aiops_detector_model_loaded == 0
+          for: 15m
+          labels:
+            severity: info
+            source: argus-meta
+          annotations:
+            summary: "anomaly-detector has no model loaded (train one: make train)"

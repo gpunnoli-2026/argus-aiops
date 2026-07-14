@@ -1,0 +1,21 @@
+# Argus platform values.
+# EKS: deploy.sh fills artifactBucket + mlflowRoleArn from terraform outputs.
+# kind: leave both empty — MLflow stores artifacts on its PVC instead of S3.
+
+artifactBucket: ""   # e.g. argus-artifacts-<account-id>
+mlflowRoleArn: ""    # e.g. arn:aws:iam::<account-id>:role/argus-mlflow-s3
+awsRegion: us-west-2
+
+prometheusUrl: http://monitoring-kube-prometheus-prometheus.monitoring:9090
+
+mlflow:
+  image: ghcr.io/mlflow/mlflow:v2.20.2
+  storageSize: 5Gi
+  storageClassName: gp2   # set to "standard" on kind
+
+anomalyDetector:
+  enabled: true
+  image: python:3.12-slim
+  scoreIntervalSeconds: 30
+  modelRefreshSeconds: 300
+  modelUri: models:/argus-anomaly@production

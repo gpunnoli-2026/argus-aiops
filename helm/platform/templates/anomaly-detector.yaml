@@ -1,0 +1,91 @@
+{{- if .Values.anomalyDetector.enabled }}
+# Sandbox shortcut: runs on a stock python image, installing deps at startup and
+# mounting code from the argus-detector-code ConfigMap (created by deploy.sh).
+# Phase 5 CI/CD replaces this with a proper built image in ECR.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anomaly-detector
+  namespace: aiops
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: retraining
+  namespace: aiops
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-detector
+  namespace: aiops
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: anomaly-detector }
+  template:
+    metadata:
+      labels: { app: anomaly-detector }
+    spec:
+      serviceAccountName: anomaly-detector
+      containers:
+        - name: detector
+          image: {{ .Values.anomalyDetector.image }}
+          command: ["bash", "-c"]
+          args:
+            - pip install --quiet -r /app/requirements.txt && uvicorn main:app --app-dir /app --host 0.0.0.0 --port 8080
+          env:
+            - name: PROM_URL
+              value: {{ .Values.prometheusUrl }}
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.mlflow:5000
+            - name: MODEL_URI
+              value: {{ .Values.anomalyDetector.modelUri }}
+            - name: SCORE_INTERVAL_SECONDS
+              value: {{ .Values.anomalyDetector.scoreIntervalSeconds | quote }}
+            - name: MODEL_REFRESH_SECONDS
+              value: {{ .Values.anomalyDetector.modelRefreshSeconds | quote }}
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          resources:
+            requests: { cpu: 100m, memory: 400Mi }
+            limits: { memory: 800Mi }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 60
+            periodSeconds: 15
+      volumes:
+        - name: code
+          configMap:
+            name: argus-detector-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-detector
+  namespace: aiops
+  labels: { app: anomaly-detector }
+spec:
+  selector: { app: anomaly-detector }
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: anomaly-detector
+  namespace: aiops
+spec:
+  selector:
+    matchLabels: { app: anomaly-detector }
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+{{- end }}

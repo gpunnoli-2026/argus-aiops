@@ -1,0 +1,38 @@
+# One-shot training job. Run: make train
+# Code arrives via the argus-training-code ConfigMap (created by make train).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: argus-train-anomaly
+  namespace: aiops
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: retraining
+      containers:
+        - name: train
+          image: python:3.12-slim
+          command: ["bash", "-c"]
+          args:
+            - pip install --quiet mlflow==2.20.2 scikit-learn==1.6.1 pandas==2.2.3 requests==2.32.3 numpy &&
+              python /app/train_anomaly.py
+          env:
+            - name: PROM_URL
+              value: http://monitoring-kube-prometheus-prometheus.monitoring:9090
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.mlflow:5000
+            - name: TRAIN_HOURS
+              value: "6"
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          resources:
+            requests: { cpu: 250m, memory: 500Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: code
+          configMap:
+            name: argus-training-code
