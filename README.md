@@ -17,11 +17,22 @@ with human-in-the-loop, approval-gated auto-remediation delivered through Slack.
 |---|---|---|
 | 0 | Architecture, repo scaffold, Terraform/EKS foundation | ✅ Done |
 | 1 | Telemetry & failure lab (Prometheus, Chaos Mesh, k6) | ✅ Done |
-| 2 | Anomaly detection (IsolationForest + MLflow) | 🚧 In progress |
-| 3 | Capacity forecasting (Prophet) & alert correlation | 📋 Planned |
-| 4 | Slack incident workflow + gated remediation | 📋 Planned |
+| 2 | Anomaly detection (IsolationForest + MLflow) | ✅ Done |
+| 3 | Capacity forecasting (Prophet) & alert correlation | ✅ Done |
+| 4 | Slack incident workflow + gated remediation | 📋 Next |
 | 5 | MLOps hardening (retraining, drift gates, CI/CD) | 📋 Planned |
 | 6 | Multi-cloud portability & polish | 📋 Planned |
+
+### Measured results (live chaos runs on EKS)
+
+- **Detection latency:** injected CPU fault → ML anomaly score > 0.8 in **under 2 minutes**
+- **Model iteration:** v1 (single-regime baseline) false-alerted under normal traffic;
+  v2 (multi-regime baseline: idle/ramp/steady/spike) cut background score noise **~60%**,
+  zero false alerts in a clean window, while still detecting real faults decisively —
+  promoted live via MLflow registry alias flip, no redeploy
+- **Alert correlation:** 7 raw alerts folded into **1 incident** (~86% noise reduction),
+  correctly capturing a noisy-neighbor effect (CPU stress on one service pushed
+  co-located services into anomaly), with topology-based root-cause inference
 
 ## Architecture
 
@@ -46,27 +57,6 @@ GitHub Actions
 
 ## Quickstart
 
-> Coming with Phase 0 completion.
-
 ```bash
-make up      # provision EKS + deploy platform
-make demo    # inject fault, watch the incident flow
-make down    # tear everything down (always run this)
-```
-
-## Repository layout
-
-```
-terraform/       Infrastructure as code (aws/ now; gcp/, azure/ planned)
-helm/            Platform umbrella chart + per-target values
-services/        FastAPI microservices (detection, correlation, orchestration, remediation)
-ml/              Training pipelines, evaluation, drift checks
-chaos/           Chaos Mesh experiment library (labeled ground truth)
-loadgen/         k6 load profiles
-observability/   Dashboards, recording & alerting rules
-docs/            Architecture, build plan, runbooks, design decisions
-```
-
-## License
-
-[Apache-2.0](LICENSE)
+make up            # provision VPC + EKS + S3 (~15 min)
+make deploy        # o
