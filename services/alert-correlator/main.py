@@ -55,8 +55,16 @@ def _service_of(alert: dict) -> str:
     return labels.get("alertname", "unknown")
 
 
+# services that participate in topology inference (deps + dependents)
+KNOWN_SERVICES = set(TOPOLOGY) | {d for deps in TOPOLOGY.values() for d in deps}
+
+
 def _infer_root(services: set[str]) -> str:
-    """Alerted services whose own dependencies are all healthy = failure origin."""
+    """Alerted services whose own dependencies are all healthy = failure origin.
+
+    Only known app services participate — infra alerts (no service label) fall
+    back to pseudo-service names and must not pollute root-cause inference."""
+    services = {s for s in services if s in KNOWN_SERVICES} or services
     candidates = []
     for svc in services:
         deps = TOPOLOGY.get(svc, [])
