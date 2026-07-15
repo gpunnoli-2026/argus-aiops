@@ -24,7 +24,8 @@ down: ## Tear down ALL cloud resources — always run after a session
 	@echo ">>> Removing Kubernetes-created load balancers first (they block VPC deletion)..."
 	-kubectl get svc -A --no-headers 2>/dev/null | awk '$$3=="LoadBalancer" {print $$1, $$2}' | \
 		while read ns name; do kubectl -n $$ns delete svc $$name --timeout=60s; done
-	-sleep 60
+	-bash -c "sleep 60"   # wait for ELB network interfaces to release (bash: portable on Windows)
+	$(TF) init
 	$(TF) destroy -auto-approve
 	@echo ">>> All AWS resources destroyed. Verify in console: EKS, EC2, NAT GW, S3."
 
