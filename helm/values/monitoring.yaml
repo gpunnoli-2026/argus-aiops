@@ -1,4 +1,4 @@
-# kube-prometheus-stack values — sized for a small 2-4 node sandbox cluster
+# kube-prometheus-stack values — sized for a small 3-4 node sandbox cluster
 grafana:
   adminPassword: argus-admin # sandbox only; rotate if cluster is ever long-lived
   resources:
@@ -38,4 +38,16 @@ alertmanager:
       repeat_interval: 4h
       routes:
         - receiver: "null"
-          
+          matchers:
+            - alertname = "Watchdog"
+    receivers:
+      - name: "null"
+      - name: argus-correlator
+        webhook_configs:
+          - url: http://alert-correlator.aiops.svc:8080/webhook
+            send_resolved: true
+
+# Trim components we don't need in a sandbox
+kubeEtcd: { enabled: false }
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }
