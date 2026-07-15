@@ -81,4 +81,5 @@ metadata:
 spec:
   selector: { app: mlflow }
   ports:
-    - por
+    - port: 5000
+      targetPort: 5000
