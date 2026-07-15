@@ -62,12 +62,15 @@ load-stop: ## Stop background traffic
 	kubectl -n loadgen delete job k6-steady k6-varied --ignore-not-found
 
 chaos-cpu: ## Inject 5m CPU stress on cartservice
+	-kubectl delete -f chaos/cpu-stress.yaml --ignore-not-found 2>/dev/null
 	kubectl apply -f chaos/cpu-stress.yaml
 
 chaos-podkill: ## Kill one recommendationservice pod
+	-kubectl delete -f chaos/pod-kill.yaml --ignore-not-found 2>/dev/null
 	kubectl apply -f chaos/pod-kill.yaml
 
 chaos-latency: ## Inject 5m of 500ms latency on productcatalogservice
+	-kubectl delete -f chaos/network-delay.yaml --ignore-not-found 2>/dev/null
 	kubectl apply -f chaos/network-delay.yaml
 
 chaos-clean: ## Remove all chaos experiments
@@ -100,7 +103,7 @@ forecasts: ## Show current capacity forecasts
 	kubectl -n aiops exec deploy/capacity-forecaster -- python -c "import requests;print(requests.get('http://localhost:8080/forecasts').text)"
 
 incidents: ## Show correlated incidents
-	kubectl -n aiops exec deploy/alert-correlator -- python -c "import requests;print(requests.get('http://localhost:8080/incidents').text)"
+	kubectl -n aiops exec deploy/alert-correlator -- python -c "import urllib.request;print(urllib.request.urlopen('http://localhost:8080/incidents').read().decode())"
 
 scores: ## Show current anomaly scores
 	kubectl -n aiops exec deploy/anomaly-detector -- python -c "import requests;print(requests.get('http://localhost:8080/scores').text)"
