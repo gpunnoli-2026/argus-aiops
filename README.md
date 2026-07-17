@@ -59,4 +59,30 @@ GitHub Actions
 
 ```bash
 make up            # provision VPC + EKS + S3 (~15 min)
-make deploy        # o
+make deploy        # observability stack, demo app, chaos tooling, Argus services
+make load          # baseline traffic (bake ≥2h before first training)
+make train         # train anomaly models, register in MLflow (@production)
+make chaos-cpu     # inject a fault — watch detection, alerting, correlation
+make incidents     # correlated incidents with root-cause inference
+make forecasts     # capacity projections per node resource
+make down          # tear everything down (always run this)
+```
+
+`make help` lists all targets. Local dev loop without AWS: `make kind-up`.
+
+## Repository layout
+
+```
+terraform/       Infrastructure as code (aws/ now; gcp/, azure/ planned)
+helm/            Platform umbrella chart + per-target values
+services/        FastAPI microservices (detection, correlation, orchestration, remediation)
+ml/              Training pipelines, evaluation, drift checks
+chaos/           Chaos Mesh experiment library (labeled ground truth)
+loadgen/         k6 load profiles
+observability/   Dashboards, recording & alerting rules
+docs/            Architecture, build plan, runbooks, design decisions
+```
+
+## License
+
+[Apache-2.0](LICENSE)
