@@ -7,7 +7,7 @@ deterministic correlation stage (root cause already decided by rules) and:
   2. asks an LLM to write a root-cause narrative + draft a Jira ticket,
      grounded in that runbook.
 
-Design guardrail (the part to defend in an interview):
+Design guardrail:
   The LLM NEVER decides causality. Causality comes from the deterministic
   correlation layer. The LLM only EXPLAINS and DRAFTS, grounded in retrieved
   runbooks. That boundary is what makes it safe to put in an on-call path.
@@ -204,7 +204,7 @@ def diagnose(incident: Incident, store: RunbookStore) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Demo: the payment-service DB-pool-exhaustion incident from the walk-through.
+# Demo: the payment-service DB-pool-exhaustion incident.
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     runbooks = [
