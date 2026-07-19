@@ -44,6 +44,8 @@ Chaos fault injected
   → Online Boutique degrades
   → Prometheus metrics / Alertmanager alerts
   → ML services: anomaly score, capacity forecast, alert correlation
+  → deterministic root cause → LLM diagnostic layer drafts narrative + Jira
+    ticket, RAG-grounded in the matching runbook (LLM never decides causality)
   → One classified incident posted to Slack with recommended runbook
   → [Approve] → RBAC-scoped remediation (scale/restart/rollback), audited
   → Grafana shows recovery
@@ -53,7 +55,7 @@ Chaos fault injected
 
 Kubernetes (EKS) · Terraform · Helm · Prometheus/Alertmanager/Grafana · Chaos Mesh · k6 ·
 Python · scikit-learn · Prophet · MLflow · Evidently · FastAPI · Slack (Socket Mode) ·
-GitHub Actions
+Anthropic Claude (RAG-grounded diagnostic narrative) · GitHub Actions
 
 ## Quickstart
 
@@ -66,6 +68,9 @@ make chaos-cpu     # inject a fault — watch detection, alerting, correlation
 make incidents     # correlated incidents with root-cause inference
 make forecasts     # capacity projections per node resource
 make down          # tear everything down (always run this)
+
+python src/llm_diagnostic.py   # standalone demo: RAG-grounded narrative + ticket draft
+                                # (runs fully offline — no API key needed)
 ```
 
 `make help` lists all targets. Local dev loop without AWS: `make kind-up`.
@@ -76,6 +81,7 @@ make down          # tear everything down (always run this)
 terraform/       Infrastructure as code (aws/ now; gcp/, azure/ planned)
 helm/            Platform umbrella chart + per-target values
 services/        FastAPI microservices (detection, correlation, orchestration, remediation)
+src/             LLM diagnostic layer — RAG-grounded incident narrative + ticket drafting
 ml/              Training pipelines, evaluation, drift checks
 chaos/           Chaos Mesh experiment library (labeled ground truth)
 loadgen/         k6 load profiles
