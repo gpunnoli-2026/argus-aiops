@@ -35,7 +35,7 @@ Leave it running ≥2 hours. (Lunch, meetings, LinkedIn.)
 Optional sanity check in Grafana meanwhile:
 
 ```bash
-make grafana                  # http://localhost:3000  admin / argus-admin
+make grafana                  # http://localhost:3000  admin / password from: make grafana-password
 # Explore → query: aiops:svc:cpu_rate   → should show all boutique services
 ```
 

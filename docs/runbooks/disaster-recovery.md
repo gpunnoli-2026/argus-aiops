@@ -271,7 +271,7 @@ kubectl get nodes                         # 3 nodes, all Ready
 kubectl get pods -A | grep -v Running | grep -v Completed   # no non-Running pods
 
 # 2. Observability
-make grafana                              # http://localhost:3000  admin / argus-admin
+make grafana                              # http://localhost:3000  admin / password from: make grafana-password
 # Query in Explore: aiops:svc:cpu_rate    # should show all boutique services
 
 # 3. ML detection

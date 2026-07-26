@@ -1,4 +1,4 @@
-.PHONY: help up down plan kubeconfig kind-up kind-down deploy load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana train rollback mlflow detector-logs forecaster-logs forecasts incidents scores demo test lint fmt
+.PHONY: help up down plan kubeconfig kind-up kind-down deploy load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana grafana-password train rollback mlflow detector-logs forecaster-logs forecasts incidents scores demo test lint fmt
 
 AWS_PROFILE ?= argus
 TF_DIR      := terraform/aws
@@ -79,6 +79,9 @@ chaos-clean: ## Remove all chaos experiments
 
 grafana: ## Port-forward Grafana to http://localhost:3000
 	kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
+
+grafana-password: ## Print the generated Grafana admin password
+	@kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d && echo
 
 ## ----- ML -----
 

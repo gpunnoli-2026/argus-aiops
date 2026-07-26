@@ -19,6 +19,13 @@ for ns in monitoring boutique chaos loadgen aiops mlflow; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 done
 
+echo ">>> Grafana admin credentials (generated once, stored as a Secret)..."
+if ! kubectl -n monitoring get secret grafana-admin >/dev/null 2>&1; then
+  kubectl -n monitoring create secret generic grafana-admin \
+    --from-literal=admin-user=admin \
+    --from-literal=admin-password="$(openssl rand -hex 16)"
+fi
+
 echo ">>> kube-prometheus-stack (Prometheus, Alertmanager, Grafana)..."
 helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
@@ -81,7 +88,7 @@ echo ""
 echo ">>> Done. Useful commands:"
 echo "  kubectl -n boutique get pods                     # demo app status"
 echo "  kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80"
-echo "      → http://localhost:3000  (admin / argus-admin)"
+echo "      → http://localhost:3000  (admin / make grafana-password)"
 echo "  make load / make load-varied                     # background traffic"
 echo "  make chaos-cpu                                   # inject a CPU stress fault"
 echo "  make forecasts / make incidents                  # Phase 3 outputs"
