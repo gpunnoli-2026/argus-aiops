@@ -52,6 +52,12 @@ kubectl -n aiops create configmap argus-forecaster-code \
 kubectl -n aiops create configmap argus-correlator-code \
   --from-file=services/alert-correlator/ \
   --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n aiops create configmap argus-training-code \
+  --from-file=ml/training/train_anomaly.py \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+echo ">>> Scheduled retraining (nightly, gated promotion)..."
+kubectl apply -f ml/training/retrain-cronjob.yaml
 
 EXTRA_ARGS=""
 if command -v terraform >/dev/null 2>&1 && [ -f terraform/aws/terraform.tfstate ]; then
