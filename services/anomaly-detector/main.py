@@ -58,7 +58,7 @@ def _load_model():
         _state["model_ts"] = time.time()
         MODEL_LOADED.set(1)
         log.info("loaded model from %s", MODEL_URI)
-    except Exception as exc:  # noqa: BLE001 — registry may simply be empty pre-first-train
+    except Exception as exc:
         MODEL_LOADED.set(0)
         log.warning("no model available from %s: %s", MODEL_URI, exc)
 
@@ -90,7 +90,7 @@ def _loop():
                 _load_model()
             _score_once()
             errors = 0
-        except Exception:  # noqa: BLE001
+        except Exception:
             errors += 1
             log.exception("scoring loop failure #%d", errors)
         SCORING_ERRORS.set(errors)
