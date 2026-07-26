@@ -71,19 +71,35 @@ def _infer_root(services: set[str]) -> str:
         if not any(d in services for d in deps):
             candidates.append(svc)
     if not candidates:
-        return sorted(services)[0] if services else "unknown"
+        return min(services) if services else "unknown"
     # prefer the deepest candidate (most transitive dependents alerted)
     def dependents(svc: str) -> int:
         return sum(1 for s, deps in TOPOLOGY.items() if svc in deps and s in services)
-    return sorted(candidates, key=dependents, reverse=True)[0]
+    return max(candidates, key=dependents)
 
 
-def _active_incident() -> dict | None:
-    if _incidents:
-        inc = _incidents[-1]
-        if inc["status"] == "open" and time.time() - inc["last_activity"] < WINDOW_SECONDS:
+def _topology_adjacent(svc: str, services: set[str]) -> bool:
+    for other in services:
+        if svc in TOPOLOGY.get(other, []) or other in TOPOLOGY.get(svc, []):
+            return True
+    return False
+
+
+def _active_incident(svc: str) -> dict | None:
+    """Most recent open incident this alert belongs to.
+
+    Prefer an incident already involving svc (or a topology neighbour) so a
+    late alert rejoins its own incident instead of the newest one; otherwise
+    fall back to any open incident within the window — time proximity alone
+    still groups noisy-neighbour effects that topology can't see."""
+    fallback = None
+    for inc in reversed(_incidents):
+        if inc["status"] != "open" or time.time() - inc["last_activity"] >= WINDOW_SECONDS:
+            continue
+        if svc in inc["services"] or _topology_adjacent(svc, inc["services"]):
             return inc
-    return None
+        fallback = fallback or inc
+    return fallback
 
 
 def _fold_alert(alert: dict) -> None:
@@ -104,7 +120,7 @@ def _fold_alert(alert: dict) -> None:
                 break
         return
 
-    inc = _active_incident()
+    inc = _active_incident(svc)
     if inc is None:
         inc = {
             "incident_id": f"inc-{uuid.uuid4().hex[:8]}",

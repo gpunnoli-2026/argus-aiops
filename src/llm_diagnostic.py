@@ -23,11 +23,11 @@ Optional deps for production paths:
 """
 
 from __future__ import annotations
-import os
+
 import json
+import os
 import textwrap
-from dataclasses import dataclass, field, asdict
-from typing import List, Optional
+from dataclasses import asdict, dataclass
 
 USE_REAL_EMBEDDINGS = False   # True -> sentence-transformers + Chroma
 USE_REAL_LLM = False          # True -> Anthropic API (needs ANTHROPIC_API_KEY)
@@ -42,10 +42,10 @@ LLM_MODEL = "claude-sonnet-5" # confirmed current model string (see shared/model
 class Incident:
     incident_id: str
     root_service: str                 # decided by correlation, NOT by the LLM
-    affected_services: List[str]
+    affected_services: list[str]
     severity: str                     # e.g. "SEV-2"
-    signals: List[str]                # the raw alerts folded into this incident
-    dependency_edges: List[str]       # e.g. "checkout-service -> payment-service"
+    signals: list[str]                # the raw alerts folded into this incident
+    dependency_edges: list[str]       # e.g. "checkout-service -> payment-service"
     started_at: str
 
     def signature(self) -> str:
@@ -63,7 +63,7 @@ class Runbook:
 
 
 class RunbookStore:
-    def __init__(self, runbooks: List[Runbook]):
+    def __init__(self, runbooks: list[Runbook]):
         self.runbooks = runbooks
         self._backend = None
         if USE_REAL_EMBEDDINGS:
@@ -71,8 +71,8 @@ class RunbookStore:
 
     def _init_vector_backend(self):
         # Production path: embed each runbook once, query by cosine similarity.
-        from sentence_transformers import SentenceTransformer
         import chromadb
+        from sentence_transformers import SentenceTransformer
 
         self._model = SentenceTransformer("all-MiniLM-L6-v2")
         client = chromadb.Client()
@@ -84,7 +84,7 @@ class RunbookStore:
         )
         self._backend = "vector"
 
-    def retrieve(self, query: str, k: int = 1) -> List[Runbook]:
+    def retrieve(self, query: str, k: int = 1) -> list[Runbook]:
         if self._backend == "vector":
             q_emb = self._model.encode([query]).tolist()
             res = self._col.query(query_embeddings=q_emb, n_results=k)

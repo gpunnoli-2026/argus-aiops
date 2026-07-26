@@ -1,4 +1,4 @@
-.PHONY: help up down plan kubeconfig kind-up kind-down deploy load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana train mlflow detector-logs forecaster-logs forecasts incidents scores demo lint fmt
+.PHONY: help up down plan kubeconfig kind-up kind-down deploy load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana grafana-password train rollback mlflow detector-logs forecaster-logs forecasts incidents scores demo test lint fmt
 
 AWS_PROFILE ?= argus
 TF_DIR      := terraform/aws
@@ -80,6 +80,9 @@ chaos-clean: ## Remove all chaos experiments
 grafana: ## Port-forward Grafana to http://localhost:3000
 	kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
 
+grafana-password: ## Print the generated Grafana admin password
+	@kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d && echo
+
 ## ----- ML -----
 
 train: ## Train anomaly models on recent Prometheus data, register in MLflow
@@ -90,6 +93,11 @@ train: ## Train anomaly models on recent Prometheus data, register in MLflow
 	kubectl -n aiops wait --for=condition=complete --timeout=15m job/argus-train-anomaly || \
 		(kubectl -n aiops logs job/argus-train-anomaly --tail=30; exit 1)
 	kubectl -n aiops logs job/argus-train-anomaly --tail=5
+
+rollback: ## Flip the production anomaly-model alias back to the previous version
+	$(eval POD := $(shell kubectl -n aiops get pod -l app=anomaly-detector -o jsonpath='{.items[0].metadata.name}'))
+	kubectl -n aiops cp ml/training/train_anomaly.py $(POD):/tmp/train_anomaly.py
+	kubectl -n aiops exec $(POD) -- python /tmp/train_anomaly.py --rollback
 
 mlflow: ## Port-forward MLflow UI to http://localhost:5000
 	kubectl -n mlflow port-forward svc/mlflow 5000:5000
@@ -114,8 +122,11 @@ demo: ## Inject a chaos fault and watch the incident flow
 
 ## ----- Code quality -----
 
+test: ## Run the unit test suite
+	python -m pytest tests/ -q
+
 lint: ## Lint Python services
-	ruff check services/ ml/
+	ruff check services/ ml/ src/ tests/
 
 fmt: ## Format Terraform
 	terraform fmt -recursive terraform/

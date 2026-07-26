@@ -1,9 +1,14 @@
 """Train per-service anomaly models on the aiops:svc:* Prometheus series.
 
 One IsolationForest pipeline per service (plus a global fallback), bundled
-into a single MLflow pyfunc model registered as `argus-anomaly` and promoted
-via the `production` alias. Scores are calibrated to [0, 1] where higher =
-more anomalous.
+into a single MLflow pyfunc model registered as `argus-anomaly`. Promotion to
+the `production` alias is gated: the new bundle's background alarm rate on the
+training window must stay under GATE_MAX_ALARM_RATE and must not regress
+against the current production model. Scores are calibrated to [0, 1] where
+higher = more anomalous.
+
+`--rollback` flips the production alias back to the previous registered
+version instead of training.
 
 Runs in-cluster as a Job (see train-job.yaml) so it reaches Prometheus and
 MLflow directly.
@@ -11,6 +16,7 @@ MLflow directly.
 
 import logging
 import os
+import sys
 import time
 
 import mlflow
@@ -29,6 +35,9 @@ TRAIN_HOURS = float(os.environ.get("TRAIN_HOURS", "6"))
 STEP_SECONDS = int(os.environ.get("STEP_SECONDS", "60"))
 MIN_SAMPLES = int(os.environ.get("MIN_SAMPLES", "60"))
 MODEL_NAME = os.environ.get("MODEL_NAME", "argus-anomaly")
+ALERT_THRESHOLD = 0.8  # must match ServiceAnomalyDetected in observability/rules
+GATE_MAX_ALARM_RATE = float(os.environ.get("GATE_MAX_ALARM_RATE", "0.05"))
+GATE_REGRESSION_MARGIN = float(os.environ.get("GATE_REGRESSION_MARGIN", "0.02"))
 
 FEATURES = ["cpu_rate", "mem_ws_bytes", "restarts_delta", "pods_not_ready"]
 
@@ -99,6 +108,43 @@ class AnomalyBundle(mlflow.pyfunc.PythonModel):
         return out
 
 
+def alarm_rate(bundle: "AnomalyBundle | object", df: pd.DataFrame) -> float:
+    """Fraction of the (assumed mostly-normal) window scoring above the alert
+    threshold — a proxy for the false-alert noise this model would produce."""
+    scores = bundle.predict(None, df) if isinstance(bundle, AnomalyBundle) else bundle.predict(df)
+    return float((np.asarray(scores) > ALERT_THRESHOLD).mean())
+
+
+def promotion_gate(bundle: AnomalyBundle, df: pd.DataFrame) -> tuple[bool, dict]:
+    """New model must be quiet on its own training window and no noisier than
+    the current production model on that same window."""
+    new_rate = alarm_rate(bundle, df)
+    metrics = {"gate_new_alarm_rate": new_rate}
+    if new_rate > GATE_MAX_ALARM_RATE:
+        return False, metrics
+    try:
+        prod = mlflow.pyfunc.load_model(f"models:/{MODEL_NAME}@production")
+    except Exception:
+        return True, metrics
+    prod_rate = alarm_rate(prod, df)
+    metrics["gate_prod_alarm_rate"] = prod_rate
+    return new_rate <= prod_rate + GATE_REGRESSION_MARGIN, metrics
+
+
+def rollback() -> None:
+    client = mlflow.MlflowClient()
+    current = int(client.get_model_version_by_alias(MODEL_NAME, "production").version)
+    versions = sorted(
+        (int(v.version) for v in client.search_model_versions(f"name='{MODEL_NAME}'")),
+        reverse=True,
+    )
+    previous = next((v for v in versions if v < current), None)
+    if previous is None:
+        raise SystemExit(f"no version older than v{current} to roll back to")
+    client.set_registered_model_alias(MODEL_NAME, "production", previous)
+    log.info("rolled back %s @production: v%s -> v%s", MODEL_NAME, current, previous)
+
+
 def main() -> None:
     df = build_matrix()
     if df.empty:
@@ -116,6 +162,9 @@ def main() -> None:
     models["__global__"], lo, hi = fit_pipeline(df[FEATURES])
     calib["__global__"] = (lo, hi)
 
+    bundle = AnomalyBundle(models, calib)
+    promote, gate_metrics = promotion_gate(bundle, df)
+
     with mlflow.start_run(run_name="anomaly-train") as run:
         mlflow.log_params(
             {
@@ -123,21 +172,31 @@ def main() -> None:
                 "step_seconds": STEP_SECONDS,
                 "features": ",".join(FEATURES),
                 "contamination": 0.02,
+                "gate_max_alarm_rate": GATE_MAX_ALARM_RATE,
             }
         )
         mlflow.log_metrics(
-            {"rows": len(df), "services_modeled": len(models) - 1}
+            {"rows": len(df), "services_modeled": len(models) - 1, **gate_metrics}
         )
         info = mlflow.pyfunc.log_model(
             artifact_path="model",
-            python_model=AnomalyBundle(models, calib),
+            python_model=bundle,
             registered_model_name=MODEL_NAME,
         )
         version = info.registered_model_version
-        client = mlflow.MlflowClient()
-        client.set_registered_model_alias(MODEL_NAME, "production", version)
-        log.info("registered %s v%s and set @production (run %s)", MODEL_NAME, version, run.info.run_id)
+        if promote:
+            client = mlflow.MlflowClient()
+            client.set_registered_model_alias(MODEL_NAME, "production", version)
+            log.info(
+                "registered %s v%s and set @production (run %s)", MODEL_NAME, version, run.info.run_id
+            )
+        else:
+            log.error(
+                "gate FAILED (%s): registered %s v%s but NOT promoted — production keeps its current model",
+                gate_metrics, MODEL_NAME, version,
+            )
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
-    main()
+    rollback() if "--rollback" in sys.argv else main()

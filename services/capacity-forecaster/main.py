@@ -103,7 +103,7 @@ def _loop():
                 for inst, df in prom_range(query).items():
                     try:
                         h = hours_to_threshold(df)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         errors += 1
                         log.exception("fit failed for %s/%s", resource, inst)
                         continue
@@ -116,7 +116,7 @@ def _loop():
             _state["forecasts"] = snapshot
             LAST_RUN.set(time.time())
             log.info("forecast loop done: %d series, %d errors", len(snapshot), errors)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("forecast loop failure")
         FIT_ERRORS.set(errors)
         time.sleep(INTERVAL)
