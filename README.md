@@ -4,8 +4,9 @@
 
 Argus is an end-to-end AIOps platform that ingests infrastructure telemetry from a
 Kubernetes microservices application, applies ML to detect anomalies, forecast capacity
-exhaustion, and correlate alert storms into classified incidents — then closes the loop
-with human-in-the-loop, approval-gated auto-remediation delivered through Slack.
+exhaustion, and correlate alert storms into classified incidents. The closing step —
+human-in-the-loop, approval-gated auto-remediation delivered through Slack — is Phase 4,
+designed and next to build (see status below).
 
 > Named for Argus Panoptes, the hundred-eyed watchman of Greek myth.
 
@@ -20,7 +21,7 @@ with human-in-the-loop, approval-gated auto-remediation delivered through Slack.
 | 2 | Anomaly detection (IsolationForest + MLflow) | ✅ Done |
 | 3 | Capacity forecasting (Prophet) & alert correlation | ✅ Done |
 | 4 | Slack incident workflow + gated remediation | 📋 Next |
-| 5 | MLOps hardening (retraining, drift gates, CI/CD) | 📋 Planned |
+| 5 | MLOps hardening | 🔶 Partial — gated promotion, rollback, nightly retraining, CI done; drift gates (Evidently) + chaos-window eval planned |
 | 6 | Multi-cloud portability & polish | 📋 Planned |
 
 ### Measured results (live chaos runs on EKS)
@@ -44,8 +45,11 @@ Chaos fault injected
   → Online Boutique degrades
   → Prometheus metrics / Alertmanager alerts
   → ML services: anomaly score, capacity forecast, alert correlation
-  → deterministic root cause → LLM diagnostic layer drafts narrative + Jira
-    ticket, RAG-grounded in the matching runbook (LLM never decides causality)
+    (deterministic root-cause inference; incidents at /incidents)
+  → LLM diagnostic layer drafts narrative + Jira ticket, RAG-grounded in
+    the matching runbook (LLM never decides causality) — standalone demo
+    today, wired into the incident pipeline in Phase 4
+  ------------------- Phase 4 (designed, not yet built) -------------------
   → One classified incident posted to Slack with recommended runbook
   → [Approve] → RBAC-scoped remediation (scale/restart/rollback), audited
   → Grafana shows recovery
@@ -54,8 +58,9 @@ Chaos fault injected
 ## Stack
 
 Kubernetes (EKS) · Terraform · Helm · Prometheus/Alertmanager/Grafana · Chaos Mesh · k6 ·
-Python · scikit-learn · Prophet · MLflow · Evidently · FastAPI · Slack (Socket Mode) ·
-Anthropic Claude (RAG-grounded diagnostic narrative) · GitHub Actions
+Python · scikit-learn · Prophet · MLflow · FastAPI ·
+Anthropic Claude (RAG-grounded diagnostic narrative) · GitHub Actions ·
+*Phase 4/5:* Slack (Socket Mode) · Evidently
 
 ## Quickstart
 
@@ -80,7 +85,7 @@ python src/llm_diagnostic.py   # standalone demo: RAG-grounded narrative + ticke
 ```
 terraform/       Infrastructure as code (aws/ now; gcp/, azure/ planned)
 helm/            Platform umbrella chart + per-target values
-services/        FastAPI microservices (detection, correlation, orchestration, remediation)
+services/        FastAPI microservices (detection, forecasting, correlation; Phase 4 adds orchestration + remediation)
 src/             LLM diagnostic layer — RAG-grounded incident narrative + ticket drafting
 ml/              Training pipelines, evaluation, drift checks
 chaos/           Chaos Mesh experiment library (labeled ground truth)

@@ -97,6 +97,8 @@ Console double-check (30 s): EC2 instances = none, NAT gateways = none.
 
 ## After this session (next build phases)
 
-- Phase 3: capacity forecaster (Prophet) + alert correlator (DBSCAN)
+- ~~Phase 3: capacity forecaster (Prophet) + alert correlator~~ ✅ done — shipped as a
+  deterministic window+topology fold (no DBSCAN); see docs/architecture.md
 - Phase 4: Slack incident workflow + gated remediation — the flagship demo
-- Phase 5: CI/CD images (ECR), nightly retraining CronJob, Evidently drift gates
+- Phase 5: ~~nightly retraining CronJob, gated promotion, CI~~ ✅ done; still open:
+  CI/CD images (ECR), Evidently drift gates, chaos-window eval
