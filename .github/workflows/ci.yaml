@@ -50,6 +50,9 @@ jobs:
 
   terraform:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        root: [aws, gcp]
     steps:
       - uses: actions/checkout@v4
 
@@ -57,3 +60,10 @@ jobs:
 
       - name: Terraform fmt check
         run: terraform fmt -check -recursive terraform/
+
+      # -backend=false: no credentials, no state — this only type-checks the
+      # configuration, which is what breaks when the two roots drift apart.
+      - name: Terraform validate (${{ matrix.root }})
+        run: |
+          terraform -chdir=terraform/${{ matrix.root }} init -backend=false -input=false
+          terraform -chdir=terraform/${{ matrix.root }} validate
