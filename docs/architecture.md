@@ -102,6 +102,36 @@ IAM: IRSA roles — mlflow→S3, executor→none (K8s RBAC only)
 
 - Slack ingress: ALB + Ingress **or** (cheaper) `slack-events` via Socket Mode — no public endpoint needed. **Decision: Socket Mode** (zero ingress cost, no exposed public surface).
 - Local dev target: kind cluster, MinIO replaces S3 (`ARTIFACT_ENDPOINT` env var), everything else identical.
+- The demo app's upstream `frontend-external` LoadBalancer is deleted at deploy time —
+  k6 drives the in-cluster Service, so the LB would be cost plus a public unauthenticated
+  surface for every session. `make frontend-public` recreates it on demand.
+
+## 2.1b Deployment topology (GCP) — ✅ built, live parity run pending
+
+Same namespaces, same charts, same services; only the edge differs.
+
+```
+GCP project
+└── VPC argus-vpc (custom mode, 1 region)
+    ├── subnet argus-nodes 10.10.0.0/20, Private Google Access
+    │     └── secondary ranges: pods 10.20.0.0/16, services 10.30.0.0/20
+    ├── Cloud Router + Cloud NAT   (egress for private nodes: ghcr, PyPI, docker.io)
+    └── GKE Standard "argus" — zonal us-west1-b, private nodes, public endpoint
+        ├── node pool: e2-standard-2 Spot ×3 (autoscale 1–4), COS_CONTAINERD,
+        │              dedicated least-privilege node SA, Workload Identity metadata
+        ├── Dataplane V2 (NetworkPolicy without Calico; no kube-proxy to scrape)
+        ├── Google Managed Prometheus OFF — Argus brings its own
+        └── namespaces identical to the EKS topology above
+GCS: argus-artifacts-<project>   — MLflow artifacts, training datasets
+IAM: Workload Identity direct principal binding — ns/mlflow/sa/mlflow →
+     roles/storage.objectUser on that bucket only
+```
+
+Why GKE Standard and not Autopilot: Chaos Mesh's `chaos-daemon` needs privileged pods and
+a hostPath to the containerd socket, both of which Autopilot forbids. Zonal rather than
+regional: the GKE free tier covers one zonal cluster's management fee.
+
+The full design, decision log and known GKE gotchas: [gcp-port-design.md](gcp-port-design.md).
 
 ## 2.2 Component specifications
 
@@ -272,6 +302,10 @@ argus-aiops/
 ## 2.5 Security model
 
 - **IRSA** for anything touching AWS (MLflow→S3); no static keys in-cluster. ✅
+- **Workload Identity** on GCP, bound directly to the `mlflow/mlflow` KSA — no Google
+  service account, no key files, bucket-scoped. ✅ Training jobs are deliberately not
+  granted bucket access on either cloud: MLflow runs with `--serve-artifacts`, so clients
+  reach artifacts through its proxy. ✅
 - Grafana admin password generated at deploy time (never committed); retrieved via `make grafana-password`. ✅
 - **remediation-executor** (Phase 4) will be the only component with K8s write access; RBAC limited to `deployments` in `boutique` ns; no cluster-admin anywhere. 📋
 - Slack signing-secret verification on all interaction payloads; approval identity recorded in audit log. 📋 Phase 4
@@ -280,12 +314,22 @@ argus-aiops/
 
 ## 2.6 Portability abstraction
 
-| Concern | Abstraction | AWS impl | Later GCP/Azure |
-|---|---|---|---|
-| Cluster | Terraform module interface (`cluster` outputs kubeconfig) | EKS | GKE / AKS module |
-| Object storage | S3-compatible endpoint env vars | S3 | GCS (S3-interop) / MinIO gateway |
-| Secrets | External Secrets Operator | Secrets Manager | GCP SM / Key Vault |
-| Everything else | Helm charts, unchanged | — | — |
+Each Terraform root exposes the same five outputs — `cluster_name`, `location`,
+`kubeconfig_command`, `artifact_uri`, `helm_values` — so `scripts/deploy.sh` and the
+Makefile never branch on the cloud. Facts that are static per cloud (StorageClass,
+object-store SDK, whether kube-proxy exists, which filesystem the disk forecast tracks)
+live in `helm/values/<cloud>/`; facts that are per-deployment (bucket URI, pod identity)
+arrive as the `helm_values` output, applied last.
+
+| Concern | Abstraction | AWS impl ✅ | GCP impl ✅ | Azure 📋 |
+|---|---|---|---|---|
+| Cluster | TF root with a fixed output contract | EKS | GKE Standard, zonal | AKS |
+| Object storage | `artifactUri` value from `helm_values` | `s3://` + boto3 | `gs://` + google-cloud-storage | `abfss://` |
+| Pod identity | `mlflow.serviceAccountAnnotations` | IRSA role annotation | Workload Identity (no annotation needed) | AAD workload identity |
+| Block storage | `mlflow.storageClassName` overlay | `gp2` | `standard-rwo` | `managed-csi` |
+| Node telemetry quirks | overlay values | — | kube-proxy scrape off, disk mountpoint `/mnt/stateful_partition` | — |
+| Secrets (Phase 4) | External Secrets Operator | Secrets Manager | GCP Secret Manager | Key Vault |
+| Everything else | Helm charts, unchanged | — | — | — |
 
 ## 2.7 Observability of the platform itself (meta-monitoring)
 
