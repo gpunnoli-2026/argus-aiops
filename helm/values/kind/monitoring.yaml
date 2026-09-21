@@ -1,0 +1,9 @@
+# Local kind cluster: local-path provisioner, StorageClass "standard".
+# (Before the per-cloud split this file's job was done by a hardcoded gp2,
+# which left the Prometheus PVC Pending on kind.)
+prometheus:
+  prometheusSpec:
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: standard

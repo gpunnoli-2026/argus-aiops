@@ -1,17 +1,30 @@
-# Argus platform values.
-# EKS: deploy.sh fills artifactBucket + mlflowRoleArn from terraform outputs.
-# kind: leave both empty — MLflow stores artifacts on its PVC instead of S3.
+# Argus platform values — cloud-neutral defaults.
+#
+# Layering (scripts/deploy.sh applies them in this order):
+#   1. this file                      — defaults that work anywhere
+#   2. helm/values/<cloud>/platform.yaml — static facts about the cloud
+#      (StorageClass name, which object-store SDK MLflow needs)
+#   3. terraform output -json helm_values — per-deployment facts
+#      (bucket URI, pod identity wiring); absent on kind
+#
+# With no overlay at all (plain `helm install`), MLflow keeps its artifacts on
+# its own PVC and nothing cloud-specific is rendered.
 
-artifactBucket: ""   # e.g. argus-artifacts-<account-id>
-mlflowRoleArn: ""    # e.g. arn:aws:iam::<account-id>:role/argus-mlflow-s3
-awsRegion: us-west-2
+artifactUri: "" # e.g. s3://argus-artifacts-<acct>/mlartifacts, gs://argus-artifacts-<project>/mlartifacts
 
 prometheusUrl: http://monitoring-kube-prometheus-prometheus.monitoring:9090
 
 mlflow:
   image: ghcr.io/mlflow/mlflow:v2.20.2
   storageSize: 5Gi
-  storageClassName: gp2   # set to "standard" on kind
+  storageClassName: "" # empty = cluster default (gp2 on EKS, standard-rwo on GKE)
+  # Object-store SDK installed at startup: boto3 (S3) / google-cloud-storage (GCS).
+  extraPipPackages: ""
+  # Cloud SDK configuration, e.g. AWS_REGION. GCP needs none — the metadata
+  # server supplies credentials and location.
+  extraEnv: []
+  # Pod identity: IRSA needs an annotation, GCP Workload Identity does not.
+  serviceAccountAnnotations: {}
 
 anomalyDetector:
   enabled: true
@@ -25,6 +38,10 @@ capacityForecaster:
   image: python:3.12-slim
   threshold: "0.8"
   horizonHours: "12"
+  # Filesystem the disk forecast tracks. "/" is the writable root on EKS nodes
+  # and kind; on GKE's COS nodes "/" is a small read-only image partition, so
+  # the GCP overlay points this at the stateful partition instead.
+  diskMountpoint: "/"
 
 alertCorrelator:
   enabled: true

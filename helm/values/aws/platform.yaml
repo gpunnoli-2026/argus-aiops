@@ -1,0 +1,8 @@
+# Static facts about EKS. Per-deployment facts (bucket URI, IRSA role ARN)
+# arrive from `terraform -chdir=terraform/aws output -json helm_values`.
+mlflow:
+  storageClassName: gp2
+  extraPipPackages: boto3
+  extraEnv:
+    - name: AWS_REGION
+      value: us-west-2 # overridden by the terraform helm_values output

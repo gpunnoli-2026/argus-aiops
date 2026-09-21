@@ -16,10 +16,10 @@ prometheus:
     resources:
       requests: { cpu: 200m, memory: 750Mi }
       limits: { memory: 1500Mi }
+    # storageClassName comes from helm/values/<cloud>/monitoring.yaml
     storageSpec:
       volumeClaimTemplate:
         spec:
-          storageClassName: gp2
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:

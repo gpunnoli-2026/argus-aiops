@@ -1,0 +1,14 @@
+# Static facts about GKE. Per-deployment facts (bucket URI) arrive from
+# `terraform -chdir=terraform/gcp output -json helm_values`.
+#
+# No serviceAccountAnnotations and no extraEnv: Workload Identity binds the
+# mlflow/mlflow KSA directly in IAM, and credentials + project come from the
+# node metadata server.
+mlflow:
+  storageClassName: standard-rwo # GKE PD CSI, pd-balanced
+  extraPipPackages: google-cloud-storage
+
+capacityForecaster:
+  # COS mounts "/" as a small read-only image partition that always reads
+  # near-full; the writable disk the node actually fills up is here.
+  diskMountpoint: /mnt/stateful_partition

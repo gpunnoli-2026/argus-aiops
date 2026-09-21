@@ -3,9 +3,9 @@ kind: ServiceAccount
 metadata:
   name: mlflow
   namespace: mlflow
-  {{- if .Values.mlflowRoleArn }}
+  {{- with .Values.mlflow.serviceAccountAnnotations }}
   annotations:
-    eks.amazonaws.com/role-arn: {{ .Values.mlflowRoleArn }}
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 ---
 apiVersion: v1
@@ -15,7 +15,11 @@ metadata:
   namespace: mlflow
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: {{ .Values.mlflow.storageClassName }}
+  {{- /* Omitted when empty: an explicit "" means "no StorageClass" to Kubernetes,
+         not "use the cluster default" — so the key has to disappear entirely. */}}
+  {{- with .Values.mlflow.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.mlflow.storageSize }}
@@ -42,20 +46,19 @@ spec:
           command: ["bash", "-c"]
           args:
             - |
-              pip install --quiet boto3 &&
+              {{- with .Values.mlflow.extraPipPackages }}
+              pip install --quiet {{ . }} &&
+              {{- end }}
               mlflow server \
                 --backend-store-uri sqlite:////data/mlflow.db \
                 --serve-artifacts \
-                {{- if .Values.artifactBucket }}
-                --artifacts-destination s3://{{ .Values.artifactBucket }}/mlartifacts \
-                {{- else }}
-                --artifacts-destination /data/mlartifacts \
-                {{- end }}
+                --artifacts-destination {{ .Values.artifactUri | default "/data/mlartifacts" }} \
                 --host 0.0.0.0 --port 5000 \
                 --workers 2
+          {{- with .Values.mlflow.extraEnv }}
           env:
-            - name: AWS_REGION
-              value: {{ .Values.awsRegion }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - containerPort: 5000
           volumeMounts:

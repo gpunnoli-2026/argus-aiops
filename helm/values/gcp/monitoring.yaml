@@ -1,0 +1,13 @@
+# GKE-specific kube-prometheus-stack settings.
+prometheus:
+  prometheusSpec:
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: standard-rwo
+
+# Dataplane V2 replaces kube-proxy with eBPF, so there is nothing to scrape.
+# Left enabled, KubeProxyDown fires forever and feeds the correlator noise —
+# exactly the kind of alert this platform exists to suppress.
+kubeProxy:
+  enabled: false
