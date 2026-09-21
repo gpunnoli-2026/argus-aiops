@@ -33,7 +33,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
   }
 }
 
-# IRSA: MLflow pods (ns: mlflow, sa: mlflow) get S3 access to this bucket only
+# IRSA: MLflow pods (ns: mlflow, sa: mlflow) get S3 access to this bucket only.
+# Training jobs are deliberately NOT here: the server runs with --serve-artifacts,
+# so every client reaches artifacts through the MLflow proxy, never the bucket.
 module "mlflow_irsa" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.52"
@@ -47,7 +49,7 @@ module "mlflow_irsa" {
   oidc_providers = {
     main = {
       provider_arn               = module.eks.oidc_provider_arn
-      namespace_service_accounts = ["mlflow:mlflow", "aiops:retraining"]
+      namespace_service_accounts = ["mlflow:mlflow"]
     }
   }
 }
