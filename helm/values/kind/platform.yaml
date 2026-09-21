@@ -1,0 +1,5 @@
+# Static facts about a local kind cluster: the default StorageClass is
+# "standard" (local-path provisioner), and with no artifactUri set MLflow
+# keeps artifacts on its own PVC — no object store, no cloud SDK.
+mlflow:
+  storageClassName: standard

@@ -29,6 +29,11 @@ def correlator(correlator_module):
 
 
 @pytest.fixture(scope="session")
+def forecaster_module():
+    return load_module("forecaster_main", "services/capacity-forecaster/main.py")
+
+
+@pytest.fixture(scope="session")
 def train_module():
     return load_module("train_anomaly", "ml/training/train_anomaly.py")
 

@@ -1,0 +1,7 @@
+# EKS-specific kube-prometheus-stack settings.
+prometheus:
+  prometheusSpec:
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp2

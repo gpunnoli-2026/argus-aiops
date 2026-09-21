@@ -1,6 +1,7 @@
 # Argus on GCP — Port Design
 
-**Status:** 📋 Proposed (for review) · **Scope:** Phase 6 "GKE port to prove the multi-cloud claim"
+**Status:** ✅ Accepted 2026-09-20, built on `feat/gcp-port` — live parity run on GCP still pending ·
+**Scope:** Phase 6 "GKE port to prove the multi-cloud claim"
 
 ## 1. Goal and scope
 

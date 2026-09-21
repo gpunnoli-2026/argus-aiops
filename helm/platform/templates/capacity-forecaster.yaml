@@ -25,6 +25,8 @@ spec:
               value: {{ .Values.capacityForecaster.threshold | quote }}
             - name: HORIZON_HOURS
               value: {{ .Values.capacityForecaster.horizonHours | quote }}
+            - name: DISK_MOUNTPOINT
+              value: {{ .Values.capacityForecaster.diskMountpoint | quote }}
           ports:
             - containerPort: 8080
               name: http

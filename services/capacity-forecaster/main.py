@@ -30,12 +30,25 @@ THRESHOLD = float(os.environ.get("THRESHOLD", "0.8"))
 STEP = 300  # 5m resolution
 NO_CROSSING = 999.0
 
-QUERIES = {
-    "node_cpu": '1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))',
-    "node_mem": "1 - avg by (instance) (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
-    "node_disk": '1 - avg by (instance) (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} '
-    '/ node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"})',
-}
+# Which filesystem the disk forecast tracks. "/" is the writable root on EKS
+# nodes and kind, but GKE's COS image mounts "/" read-only from a small verity
+# partition that always reads near-full — forecasting that would predict
+# permanent exhaustion. There the writable disk is /mnt/stateful_partition.
+DISK_MOUNTPOINT = os.environ.get("DISK_MOUNTPOINT", "/")
+
+
+def build_queries(disk_mountpoint: str) -> dict[str, str]:
+    """Node-level utilization queries, 0-1 scaled, as fractions of capacity."""
+    disk = f'{{mountpoint="{disk_mountpoint}",fstype!~"tmpfs|overlay"}}'
+    return {
+        "node_cpu": '1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))',
+        "node_mem": "1 - avg by (instance) (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+        "node_disk": f"1 - avg by (instance) (node_filesystem_avail_bytes{disk} "
+        f"/ node_filesystem_size_bytes{disk})",
+    }
+
+
+QUERIES = build_queries(DISK_MOUNTPOINT)
 
 HOURS = Gauge(
     "aiops_forecast_hours_to_threshold",

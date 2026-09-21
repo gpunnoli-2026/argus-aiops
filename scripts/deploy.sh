@@ -1,13 +1,29 @@
 #!/usr/bin/env bash
 # Deploys: observability stack, demo app, chaos tooling, Argus platform services.
-# Idempotent — safe to re-run. Works on EKS and kind (current kube context).
+# Idempotent — safe to re-run. Deploys into the current kube context; CLOUD
+# selects which values overlay describes that cluster (EKS, GKE or kind).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Git Bash / MSYS on Windows rewrites Unix-style path arguments (e.g. helm --set
 # socketPath=/run/...) into C:/Program Files/Git/... — disable that conversion.
+# Keep every path handed to helm/kubectl repo-relative because of it.
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
+
+CLOUD="${CLOUD:-}"
+case "$CLOUD" in
+  aws | gcp | kind) ;;
+  "")
+    echo "ERROR: CLOUD is required. Use: make deploy CLOUD=aws|gcp|kind" >&2
+    exit 1
+    ;;
+  *)
+    echo "ERROR: unknown CLOUD='$CLOUD' (expected aws, gcp or kind)" >&2
+    exit 1
+    ;;
+esac
+echo ">>> Target: $CLOUD  (context: $(kubectl config current-context))"
 
 echo ">>> Adding helm repos..."
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null
@@ -30,11 +46,17 @@ echo ">>> kube-prometheus-stack (Prometheus, Alertmanager, Grafana)..."
 helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
   --values helm/values/monitoring.yaml \
+  --values "helm/values/$CLOUD/monitoring.yaml" \
   --wait --timeout 10m
 
 echo ">>> Online Boutique (demo microservices app)..."
 kubectl apply -n boutique \
   -f https://raw.githubusercontent.com/GoogleCloudPlatform/microservices-demo/v0.10.2/release/kubernetes-manifests.yaml
+
+# The upstream manifest exposes the frontend through a cloud load balancer. k6
+# drives the in-cluster Service, so that LB is pure cost and a public,
+# unauthenticated surface for every session. Opt back in: make frontend-public.
+kubectl -n boutique delete svc frontend-external --ignore-not-found
 
 echo ">>> Chaos Mesh..."
 helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
@@ -66,22 +88,30 @@ kubectl -n aiops create configmap argus-training-code \
 echo ">>> Scheduled retraining (nightly, gated promotion)..."
 kubectl apply -f ml/training/retrain-cronjob.yaml
 
-EXTRA_ARGS=""
-if command -v terraform >/dev/null 2>&1 && [ -f terraform/aws/terraform.tfstate ]; then
-  BUCKET=$(terraform -chdir=terraform/aws output -raw artifact_bucket 2>/dev/null || true)
-  ROLE=$(terraform -chdir=terraform/aws output -raw mlflow_irsa_role_arn 2>/dev/null || true)
-  if [ -n "$BUCKET" ]; then
-    EXTRA_ARGS="--set artifactBucket=$BUCKET --set mlflowRoleArn=$ROLE"
-    echo "    using S3 artifacts: $BUCKET"
+# Per-deployment facts (bucket URI, pod identity) come from Terraform as a
+# ready-made values document — deploy.sh never learns which cloud it is on.
+# Repo-relative path: MSYS_NO_PATHCONV above would mangle an absolute /tmp one.
+TF_VALUES=".terraform-helm-values.json"
+EXTRA_ARGS=()
+trap 'rm -f "$TF_VALUES"' EXIT
+
+if [ "$CLOUD" != "kind" ] && command -v terraform >/dev/null 2>&1 &&
+  [ -f "terraform/$CLOUD/terraform.tfstate" ]; then
+  if terraform -chdir="terraform/$CLOUD" output -json helm_values >"$TF_VALUES" 2>/dev/null &&
+    [ -s "$TF_VALUES" ]; then
+    EXTRA_ARGS=(--values "$TF_VALUES")
+    echo "    artifacts: $(terraform -chdir="terraform/$CLOUD" output -raw artifact_uri)"
   fi
-else
-  echo "    no terraform state found — MLflow will use PVC-local artifacts (kind mode)"
 fi
 
-# shellcheck disable=SC2086
+if [ ${#EXTRA_ARGS[@]} -eq 0 ]; then
+  echo "    no terraform outputs — MLflow will use PVC-local artifacts"
+fi
+
 helm upgrade --install argus helm/platform \
   --namespace aiops \
-  $EXTRA_ARGS \
+  --values "helm/values/$CLOUD/platform.yaml" \
+  "${EXTRA_ARGS[@]}" \
   --wait --timeout 10m
 
 echo ""
@@ -92,3 +122,4 @@ echo "      → http://localhost:3000  (admin / make grafana-password)"
 echo "  make load / make load-varied                     # background traffic"
 echo "  make chaos-cpu                                   # inject a CPU stress fault"
 echo "  make forecasts / make incidents                  # Phase 3 outputs"
+echo "  make frontend-public                             # expose the demo app (creates a cloud LB)"

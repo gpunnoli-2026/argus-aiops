@@ -8,9 +8,12 @@ kubeconfig*
 !example.tfvars
 .aws/
 credentials*
+*-sa-key.json
+application_default_credentials.json
 
 # Terraform
 .terraform/
+.terraform-helm-values.json   # deploy.sh: terraform outputs handed to helm
 *.tfstate
 *.tfstate.*
 .terraform.lock.hcl
