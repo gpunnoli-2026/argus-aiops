@@ -3,8 +3,6 @@
 resource "google_service_account" "nodes" {
   account_id   = "${var.cluster_name}-nodes"
   display_name = "Argus GKE nodes"
-
-  depends_on = [google_project_service.required]
 }
 
 resource "google_project_iam_member" "nodes" {
@@ -16,7 +14,7 @@ resource "google_project_iam_member" "nodes" {
     "roles/artifactregistry.reader",
   ])
 
-  project = var.project_id
+  project = local.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.nodes.email}"
 }
@@ -34,21 +32,23 @@ resource "google_container_cluster" "argus" {
   remove_default_node_pool = true
   initial_node_count       = 1
 
-  network    = google_compute_network.vpc.id
-  subnetwork = google_compute_subnetwork.nodes.id
+  # Shared VPC: the network lives in the host project (2-networks), which has
+  # already granted GKE's service agents networkUser on this subnet.
+  network    = local.net.network
+  subnetwork = local.net.subnetwork
 
   networking_mode   = "VPC_NATIVE"
   datapath_provider = var.datapath_provider
 
   ip_allocation_policy {
-    cluster_secondary_range_name  = "pods"
-    services_secondary_range_name = "services"
+    cluster_secondary_range_name  = local.net.pods_range_name
+    services_secondary_range_name = local.net.services_range_name
   }
 
   private_cluster_config {
     enable_private_nodes    = true
     enable_private_endpoint = false # kubectl from a laptop, same as the EKS side
-    master_ipv4_cidr_block  = var.master_ipv4_cidr_block
+    master_ipv4_cidr_block  = local.net.master_ipv4_cidr_block
   }
 
   dynamic "master_authorized_networks_config" {
@@ -71,7 +71,7 @@ resource "google_container_cluster" "argus" {
   # Pod identity without service-account keys: a KSA is granted GCP roles
   # directly (see storage.tf).
   workload_identity_config {
-    workload_pool = "${var.project_id}.svc.id.goog"
+    workload_pool = "${local.project_id}.svc.id.goog"
   }
 
   # Argus brings its own Prometheus. Google Managed Prometheus is on by default
@@ -94,7 +94,12 @@ resource "google_container_cluster" "argus" {
     }
   }
 
-  depends_on = [google_project_service.required]
+  lifecycle {
+    precondition {
+      condition     = startswith(var.zone, "${local.net.region}-")
+      error_message = "zone ${var.zone} is outside the shared subnet's region (${local.net.region})."
+    }
+  }
 }
 
 resource "google_container_node_pool" "default" {
@@ -116,7 +121,7 @@ resource "google_container_node_pool" "default" {
 
   node_config {
     machine_type = var.machine_type
-    spot         = true # cost: ~60-90% off; fine for a rebuildable sandbox
+    spot         = var.use_spot # cost: ~60-90% off; fine for a rebuildable sandbox
     image_type   = "COS_CONTAINERD"
 
     disk_size_gb = var.node_disk_size_gb
@@ -144,4 +149,7 @@ resource "google_container_node_pool" "default" {
     # the autoscaler owns the live node count
     ignore_changes = [initial_node_count]
   }
+
+  # Nodes pull images through NAT, so destroy removes them before their egress.
+  depends_on = [google_compute_router_nat.nat]
 }

@@ -95,12 +95,20 @@ TF_VALUES=".terraform-helm-values.json"
 EXTRA_ARGS=()
 trap 'rm -f "$TF_VALUES"' EXIT
 
-if [ "$CLOUD" != "kind" ] && command -v terraform >/dev/null 2>&1 &&
-  [ -f "terraform/$CLOUD/terraform.tfstate" ]; then
-  if terraform -chdir="terraform/$CLOUD" output -json helm_values >"$TF_VALUES" 2>/dev/null &&
+# The Makefile passes TF_DIR; the fallback keeps a direct `CLOUD=gcp bash
+# scripts/deploy.sh` working. Ask Terraform rather than looking for a local
+# terraform.tfstate: the GCP stage keeps its state in GCS, so no such file
+# ever exists there, and outputs would silently never be read.
+case "$CLOUD" in
+  gcp) TF_DIR="${TF_DIR:-terraform/gcp/3-apps}" ;;
+  *) TF_DIR="${TF_DIR:-terraform/$CLOUD}" ;;
+esac
+
+if [ "$CLOUD" != "kind" ] && command -v terraform >/dev/null 2>&1; then
+  if terraform -chdir="$TF_DIR" output -json helm_values >"$TF_VALUES" 2>/dev/null &&
     [ -s "$TF_VALUES" ]; then
     EXTRA_ARGS=(--values "$TF_VALUES")
-    echo "    artifacts: $(terraform -chdir="terraform/$CLOUD" output -raw artifact_uri)"
+    echo "    artifacts: $(terraform -chdir="$TF_DIR" output -raw artifact_uri)"
   fi
 fi
 

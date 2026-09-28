@@ -9,7 +9,11 @@ CLOUD        ?=
 AWS_PROFILE  ?= argus
 CLOUDS_INFRA := aws gcp
 CLOUDS_ALL   := aws gcp kind
-TF_DIR       := terraform/$(CLOUD)
+# GCP is a staged landing zone; make up|down only ever touch its workload
+# stage. Stages 0-2 are applied by hand and persist (docs/gcp-port-design.md).
+TF_DIR_aws   := terraform/aws
+TF_DIR_gcp   := terraform/gcp/3-apps
+TF_DIR       := $(TF_DIR_$(CLOUD))
 TF           := terraform -chdir=$(TF_DIR)
 
 help: ## Show available targets
@@ -90,8 +94,9 @@ down: check-cloud check-context ## Tear down ALL cloud resources — always run 
 		echo "    aws ec2 describe-volumes --filters Name=status,Values=available"; \
 		echo "    console: EKS, EC2, NAT GW, S3"; \
 	else \
-		echo "    gcloud compute disks list"; \
-		echo "    gcloud compute forwarding-rules list"; \
+		echo "    gcloud compute disks list --project gk-argus-nonprod-gke-apps"; \
+		echo "    gcloud compute forwarding-rules list --project gk-argus-nonprod-gke-apps"; \
+		echo "    gcloud compute firewall-rules list --project gk-argus-nonprod-net-host  # no gke-* rules left"; \
 	fi
 
 kubeconfig: CLOUDS = $(CLOUDS_INFRA)
@@ -112,7 +117,7 @@ kind-down: ## Delete the local kind cluster
 
 deploy: CLOUDS = $(CLOUDS_ALL)
 deploy: check-cloud check-context ## Deploy observability, demo app, chaos tooling, Argus services
-	CLOUD=$(CLOUD) bash scripts/deploy.sh
+	CLOUD=$(CLOUD) TF_DIR=$(TF_DIR) bash scripts/deploy.sh
 
 frontend-public: ## Expose the demo app via a cloud load balancer (billed; delete when done)
 	kubectl -n boutique expose deployment frontend --name=frontend-external \

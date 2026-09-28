@@ -180,6 +180,9 @@ monitoring stack; net session cost still roughly halves because of the control p
 
 ## 8. Changes by file
 
+> Superseded for `terraform/gcp/`: the root now lives in `terraform/gcp/3-apps/`, one stage of a
+> landing zone. See §12–16. The Helm, deploy and CI items below still apply.
+
 **New — `terraform/gcp/`**
 ```
 versions.tf    google ~> 6.x provider, required_version >= 1.7, default labels
@@ -591,3 +594,83 @@ control-plane CIDR. Stage 3 reads these instead of creating its own VPC.
   granted fine under it (the logging sink's writer identity was, in stage 1).
 - **Cost:** everything in this stage is free while idle. NAT charges start and stop with the
   cluster in stage 3.
+
+## 16. Stage `3-apps` (plan, 2026-09-28)
+
+**Purpose:** turn the single-project app root into the landing zone's workload stage. The cluster,
+node SA and MLflow bucket go into `gk-argus-nonprod-gke-apps` on the shared subnet from stage 2,
+and Cloud NAT comes and goes with them. This is the only stage `make up|down CLOUD=gcp` touches;
+stages 0–2 persist between sessions.
+
+**Location:** `git mv terraform/gcp/*.tf terraform/gcp/3-apps/`, which keeps history. The old root
+was never applied (no state), so there is nothing to migrate. State goes to
+`gs://gk-argus-boot-tfstate/3-apps/`, remote from the first apply. Runs as `sa-tf-apps` (backend
+and provider both impersonate it). Reads `1-org` (project ID and number) and `2-networks` (network,
+subnet, range names, router, control-plane CIDR) with `terraform_remote_state`.
+
+### Changes by file (inside `3-apps/`)
+
+| File | Change |
+|---|---|
+| `apis.tf` | **Deleted.** Stage 1 enables the same four APIs on gke-apps; every `depends_on = [google_project_service.required]` goes with it |
+| `network.tf` | VPC, subnet and router **removed** (stage 2 owns them). Keeps one resource: `google_compute_router_nat` `nonprod-nat-usw1` on `nonprod-router-usw1` in the **host** project, same settings as today (`AUTO_ONLY`, all ranges, logs off). `sa-tf-apps` can do this only through the `natOperator` role from stage 1 |
+| `gke.tf` | `network`/`subnetwork` from stage 2; `master_ipv4_cidr_block` from stage 2's output; the node pool `depends_on` the NAT, so `destroy` removes nodes before their egress. Picks up the uncommitted `use_spot` change |
+| `storage.tf` | Unchanged apart from the project. Bucket becomes `argus-artifacts-gk-argus-nonprod-gke-apps` (41 of 63 chars) |
+| `versions.tf` | GCS backend, prefix `3-apps`; provider impersonates `sa-tf-apps`; `project` from stage 1's output; two `terraform_remote_state` blocks |
+| `variables.tf` | **Removed:** `project_id` (from stage 1), `subnet_cidr`, `pods_cidr`, `services_cidr`, `master_ipv4_cidr_block` (all stage 2). **Kept:** region, zone, cluster name, machine type, `use_spot`, node sizes, datapath, `master_authorized_cidrs`. Nothing is required any more, so no `terraform.tfvars` is needed |
+| `outputs.tf` | **Same five contract outputs** as `terraform/aws` (`cluster_name`, `location`, `kubeconfig_command`, `artifact_uri`, `helm_values`), plus `network`, now the shared VPC. `kubeconfig_command` already carries `--project` |
+| `example.tfvars` | `project_id` line removed; the rest stays as override docs |
+
+### Changes outside the stage
+
+- **`Makefile`:** `TF_DIR` becomes per cloud (`aws` → `terraform/aws`, `gcp` → `terraform/gcp/3-apps`)
+  and is passed to `deploy.sh`. The post-`down` verification lines gain `--project` flags and a
+  firewall check on the host, where GKE's own rules live:
+  `gcloud compute firewall-rules list --project gk-argus-nonprod-net-host`.
+- **`scripts/deploy.sh`: bug fix.** It currently reads Terraform outputs only
+  `if [ -f "terraform/$CLOUD/terraform.tfstate" ]`. With remote state there is never a local file,
+  so the check would silently fall back to "PVC-local artifacts" and MLflow would never use GCS.
+  It changes to "`terraform output` succeeds", using `TF_DIR` from the Makefile. That's correct for
+  local state (AWS) and remote state (GCP) alike.
+- **CI:** matrix entry `gcp` → `gcp/3-apps`. `terraform/gcp/` itself no longer holds a root.
+- **Docs:** README line 68 (`CLOUD=gcp gives VPC + GKE + GCS` → GKE + GCS on the landing zone's
+  shared VPC); §8 of this doc gets a pointer to §16.
+
+### Stage 1 change this needs: a human operator on the workload project
+`gk@` has org-level roles only, and none of them includes GKE or project read access. That breaks
+`make kubeconfig` (`get-credentials`), every `kubectl` call behind `make deploy` and `make down`'s
+PVC and LB cleanup, and the post-`down` `gcloud compute disks list`. Terraform itself is fine,
+because it impersonates `sa-tf-apps`.
+
+`1-org` grants a new `operators` variable (default `["user:gk@gklabs.fyi"]`) on the **`nonprod/`
+folder**: `roles/container.admin` (cluster credentials and full Kubernetes RBAC) and
+`roles/viewer` (disks, forwarding rules, logs). It covers nonprod projects only, never `boot/` or
+`shared/`.
+
+### Risks
+- **Free-trial vCPU cap:** trial accounts are limited to about 8 concurrent vCPUs. Three
+  `e2-standard-2` nodes use 6, and the autoscaler's max of 4 reaches 8. The default pool GKE
+  creates and removes during cluster creation is gone before the managed pool starts, so the peak
+  is 6. If apply fails on quota: fewer nodes, `use_spot = false`, or upgrade the account (the
+  credit is kept).
+- **Spot quota:** already handled by `use_spot` (uncommitted change, carried over).
+- **NAT permissions (hit on the first `make up`):** creating a NAT also needs
+  `compute.networks.updatePolicy` on the VPC, now in `natOperator`. On its own it can't create
+  firewall rules, which need `compute.firewalls.create`.
+- **Node pool read-back (hit on the first `make up`):** GKE creates the pool as its own service
+  agent, but the provider then reads the instance group as `sa-tf-apps`, which needs
+  `compute.instanceGroupManagers.get`. `roles/compute.viewer` (read-only) was added on gke-apps. The
+  failed read tainted a healthy pool; it was untainted rather than rebuilt.
+- **Workload Identity pool timing (hit on the first `make up`):** the MLflow bucket binding names
+  `<project>.svc.id.goog`, which exists only once the cluster does. The binding now
+  `depends_on` the cluster; nothing in its member string implied the ordering.
+- **Org policies vs. GKE:** private nodes satisfy `vmExternalIpAccess`, `us-west1-b` satisfies
+  `resourceLocations`, and node images are unaffected by `requireOsLogin`. Worth watching on the
+  first `make up`, because this is the first workload under the guardrails.
+- **Teardown completeness:** GKE deletes the firewall rules it created in the host when the cluster
+  is deleted. The new host-project firewall check in `make down`'s output confirms it.
+
+### Acceptance
+`make up CLOUD=gcp` → nodes `Ready` → `make deploy CLOUD=gcp` prints a `gs://` artifact URI (proof
+the `deploy.sh` fix works) → the §10 parity run → `make down CLOUD=gcp` → the three verification
+lists are empty, and stages 0–2 still show "No changes".

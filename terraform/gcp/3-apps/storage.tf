@@ -1,8 +1,8 @@
 # MLflow artifacts + training datasets. Bucket names are globally unique, hence
 # the project suffix.
 resource "google_storage_bucket" "artifacts" {
-  name     = "${var.cluster_name}-artifacts-${var.project_id}"
-  location = upper(var.region)
+  name     = "${var.cluster_name}-artifacts-${local.project_id}"
+  location = upper(local.net.region)
 
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
@@ -13,8 +13,6 @@ resource "google_storage_bucket" "artifacts" {
 
   # Portfolio project: let `terraform destroy` remove a non-empty bucket
   force_destroy = true
-
-  depends_on = [google_project_service.required]
 }
 
 # Workload Identity, direct principal binding: the mlflow/mlflow Kubernetes
@@ -27,5 +25,10 @@ resource "google_storage_bucket" "artifacts" {
 resource "google_storage_bucket_iam_member" "mlflow" {
   bucket = google_storage_bucket.artifacts.name
   role   = "roles/storage.objectUser" # objects: get/list/create/delete — no bucket admin
-  member = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/mlflow/sa/mlflow"
+  member = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${local.project_id}.svc.id.goog/subject/ns/mlflow/sa/mlflow"
+
+  # The <project>.svc.id.goog pool only exists once a cluster with Workload
+  # Identity does; before that the binding fails with "Identity Pool does not
+  # exist". Nothing in the member string references the cluster, so say it.
+  depends_on = [google_container_cluster.argus]
 }

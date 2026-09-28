@@ -44,3 +44,12 @@ variable "budget_alert_emails" {
     error_message = "A budget accepts at most 5 notification channels."
   }
 }
+
+# Terraform impersonates the stage SAs, but kubectl, get-credentials and the
+# post-`make down` checks run as the human, who otherwise holds only org-level
+# roles.
+variable "operators" {
+  description = "Humans who run make up/deploy/down against nonprod, e.g. user:gk@gklabs.fyi"
+  type        = list(string)
+  default     = ["user:gk@gklabs.fyi"]
+}

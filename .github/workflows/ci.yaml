@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        root: [aws, gcp, gcp/0-bootstrap, gcp/1-org, gcp/2-networks]
+        root: [aws, gcp/0-bootstrap, gcp/1-org, gcp/2-networks, gcp/3-apps]
     steps:
       - uses: actions/checkout@v4
 

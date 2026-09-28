@@ -24,6 +24,9 @@ locals {
         "roles/iam.serviceAccountUser",
         # Node SA roles and the MLflow bucket binding.
         "roles/resourcemanager.projectIamAdmin",
+        # Read-only. The provider reads back the node pool's instance group
+        # after GKE creates it (found on the first make up).
+        "roles/compute.viewer",
       ]
     }
   }
@@ -60,7 +63,11 @@ resource "google_project_iam_custom_role" "nat_operator" {
   role_id     = "natOperator"
   title       = "Cloud NAT operator"
   description = "Add and remove Cloud NAT on existing routers; no other network changes"
+  # networks.updatePolicy: creating a NAT also updates the VPC's policy
+  # (found on the first make up). It can't create firewall rules on its own;
+  # that needs compute.firewalls.create, which this role doesn't hold.
   permissions = [
+    "compute.networks.updatePolicy",
     "compute.regionOperations.get",
     "compute.routers.get",
     "compute.routers.list",
@@ -72,4 +79,22 @@ resource "google_project_iam_member" "apps_nat_operator" {
   project = google_project.this["nonprod-net-host"].project_id
   role    = google_project_iam_custom_role.nat_operator.id
   member  = "serviceAccount:${local.stage_sa["apps"]}"
+}
+
+# Scoped to nonprod/: cluster credentials and full Kubernetes RBAC, plus read
+# access for disks, forwarding rules and logs. Nothing on boot/ or shared/.
+locals {
+  operator_grants = merge([
+    for m in var.operators : {
+      for role in ["roles/container.admin", "roles/viewer"] : "${m}/${role}" => { member = m, role = role }
+    }
+  ]...)
+}
+
+resource "google_folder_iam_member" "operators" {
+  for_each = local.operator_grants
+
+  folder = google_folder.this["nonprod"].name
+  role   = each.value.role
+  member = each.value.member
 }
