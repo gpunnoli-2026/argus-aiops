@@ -36,11 +36,23 @@ resource "google_organization_iam_member" "org_stage" {
   member = google_service_account.stage["org"].member
 }
 
-# Lets 1-org link the projects it creates to billing.
+# billing.user lets 1-org link the projects it creates to billing;
+# costsManager lets it own the budget. Neither can change payment settings.
 resource "google_billing_account_iam_member" "org_stage" {
+  for_each = toset([
+    "roles/billing.costsManager",
+    "roles/billing.user",
+  ])
+
   billing_account_id = var.billing_account
-  role               = "roles/billing.user"
+  role               = each.value
   member             = google_service_account.stage["org"].member
+}
+
+# The billing.user grant predates the for_each; keep it rather than recreate it.
+moved {
+  from = google_billing_account_iam_member.org_stage
+  to   = google_billing_account_iam_member.org_stage["roles/billing.user"]
 }
 
 # Local runs impersonate the stage SA, so a laptop apply and a CI apply act as

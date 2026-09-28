@@ -392,3 +392,121 @@ creates. It already has it, because the project creator is granted Owner.
 `terraform/gcp/0-bootstrap/`: `versions.tf`, `backend.tf` (commented until step 2), `variables.tf`,
 `apis.tf`, `state.tf`, `service_accounts.tf`, `wif.tf`, `outputs.tf`, `example.tfvars`.
 CI: add `gcp/0-bootstrap` to the `terraform` validate matrix in `.github/workflows/ci.yaml`.
+
+## 14. Stage `1-org` (plan, 2026-09-28)
+
+**Purpose:** build the rest of the hierarchy (folders, projects, guardrails, central audit
+logging) and hand the later stages exactly the roles they need on what it creates. First stage
+that runs as a robot: `gk@` impersonates `sa-tf-org`, locally now and from CI later.
+
+**Location:** `terraform/gcp/1-org/`. State at `gs://gk-argus-boot-tfstate/1-org/`, remote from
+the first apply (the bucket exists, so no migration step this time). The backend and provider
+both set `impersonate_service_account = sa-tf-org@…`. Bootstrap outputs (SA emails) are read with
+`terraform_remote_state` from the `0-bootstrap` prefix, not copied into tfvars.
+
+### Resources
+
+**Folders** (under `gklabs.fyi`): `shared`, `nonprod`.
+
+**Projects** (all linked to billing `0149B6-C91A10-9BA988`, `auto_create_network = false`,
+label `environment`):
+
+| Project | Folder | APIs enabled here |
+|---|---|---|
+| `gk-argus-shared-ops` | `shared/` | `logging`, `cloudkms`, `secretmanager` |
+| `gk-argus-nonprod-net-host` | `nonprod/` | `compute`, `container` (both Shared VPC host and service project need it for GKE) |
+| `gk-argus-nonprod-gke-apps` | `nonprod/` | `compute`, `container`, `iam`, `storage` |
+
+APIs for the workload projects move here from the app root's `apis.tf`, so `sa-tf-apps` doesn't
+need `serviceUsageAdmin`. Projects keep the provider-default `deletion_policy = "PREVENT"`: a stray
+`destroy` fails instead of deleting a project. Tearing one down means flipping it to `DELETE` first,
+deliberately.
+
+**Org policies** (`google_org_policy_policy`, at the organization, created before the projects):
+
+| Constraint | Setting | Why |
+|---|---|---|
+| `iam.automaticIamGrantsForDefaultServiceAccounts` | enforce (imported) | Stops the default Compute SA getting project Editor; nodes already use their own SA |
+| `compute.skipDefaultNetworkCreation` | enforce | No wide-open `default` VPC in new projects |
+| `compute.vmExternalIpAccess` | deny all | Nodes are already private (`enable_private_nodes = true`); egress goes via NAT |
+| `compute.requireOsLogin` | enforce | SSH through IAM, never project-wide keys |
+| `storage.uniformBucketLevelAccess` | enforce (imported) | Both buckets already comply |
+| `storage.publicAccessPrevention` | enforce | Both buckets already comply |
+| `gcp.resourceLocations` | `in:us-locations` | Everything runs in `us-west1` |
+
+Google already enforces a "secure by default" set on new organizations. Two of those match ours
+exactly and are adopted with `import` blocks (`imports.tf`) instead of failing on "already exists";
+destroying this stage would delete them. The rest stay Google's and are not managed here:
+`iam.managed.disableServiceAccountKeyCreation` (so no key-creation policy of our own),
+`iam.disableServiceAccountKeyUpload`, `iam.allowedPolicyMemberDomains`,
+`essentialcontacts.managed.allowedContactDomains`,
+`compute.managed.restrictProtocolForwardingCreationForTypes`.
+
+**Central audit logging:**
+- **Log bucket:** `org-audit` in `gk-argus-shared-ops`, `us-west1`, 30-day retention (the free
+  tier), Log Analytics enabled (free queries).
+- **Org sink:** `org-audit-sink` with `include_children = true` and a filter on
+  `logName:"cloudaudit.googleapis.com"`. It copies Admin Activity, System Event and Policy Denied
+  audit logs from every project into that bucket. Data Access logs stay off, because they are the
+  expensive ones.
+- **Writer grant:** the sink's writer identity gets `roles/logging.bucketWriter` on `shared-ops`.
+- **Retention not locked:** a locked bucket can't be shortened or deleted until retention
+  expires. That's right for PHI, but not for a sandbox.
+
+**Stage SA grants** (scoped to what this stage just created):
+
+| SA | Scope | Roles |
+|---|---|---|
+| `sa-tf-net` | `nonprod/` folder | `compute.xpnAdmin` (Shared VPC admin: enable host, attach service projects, grant subnet `networkUser`) |
+| `sa-tf-net` | net-host project | `compute.networkAdmin`, `compute.securityAdmin`, `resourcemanager.projectIamAdmin` (for GKE's `hostServiceAgentUser` grant) |
+| `sa-tf-apps` | gke-apps project | `container.admin`, `storage.admin`, `iam.serviceAccountAdmin`, `iam.serviceAccountUser` (node pool uses the node SA), `resourcemanager.projectIamAdmin` (node SA roles, MLflow bucket binding) |
+
+`sa-tf-org` itself needs nothing new on the projects: creating a project makes the creator Owner.
+
+**Outputs:** folder IDs; project IDs and **numbers** (stage 2 needs the gke-apps number to grant
+its GKE and Cloud Services agents `networkUser` on the shared subnet); log bucket name.
+
+**Budget** (`google_billing_budget`, whole billing account): `gk-argus monthly`, $100/month,
+alerts at 25/50/90/100% of actual spend and 100% of forecast. It measures spend **before credits**
+(`EXCLUDE_ALL_CREDITS`): with credits included, a free-trial account reads $0 until the $300 is
+gone, so no alert would fire in time. Alerts go to billing admins by default, but `gk@` and
+`admin@` have no mailboxes, so `budget_alert_emails` adds Cloud Monitoring email channels
+(in `shared-ops`) for a real inbox.
+
+### Not in this stage
+- **Shared VPC host enablement and service project attachment:** stage `2-networks`, as `sa-tf-net`.
+- **KMS key ring:** key rings can never be deleted, so the name is created once, when CMEK is
+  actually needed.
+- **Domain-restricted sharing** (`iam.allowedPolicyMemberDomains`): already enforced by Google's
+  defaults, allowing only `gklabs.fyi` principals. The WIF `principalSet` bindings applied under it
+  without trouble. Budget email channels aren't IAM grants, so a Gmail inbox still works there.
+- **Resource Manager `environment` tags:** later. The `environment` label covers reporting for now.
+
+### Bootstrap changes this needs
+Calls made as a service account bill quota to the SA's home project (the seed), so the seed needs
+three more APIs: `orgpolicy`, `logging` and `billingbudgets`. `sa-tf-org` also gets
+`roles/billing.costsManager` on the billing account to own the budget. A `moved` block keeps the
+existing `billing.user` grant when that resource becomes a `for_each`. Applied as `gk@` before
+stage 1.
+
+### Apply sequence
+1. `0-bootstrap`: add the two APIs, then `apply`.
+2. `1-org`: `init`, `plan`, `apply` as `gk@`, which impersonates `sa-tf-org` automatically. Org
+   policies take a few minutes to propagate; the projects depend on them, but a retry may still
+   be needed.
+3. Check in the console: two new folders, three projects, the sink showing in Log Router, and the
+   policies under Organization Policies.
+
+### Risks
+- **Billing account project quota:** trial billing accounts allow only a few linked projects.
+  `gk-argus-boot-seed` and `My First Project` already use two. Shutting down `My First Project`
+  first leaves room.
+- **Policy propagation:** a project created in the propagation window may briefly get a default
+  network. `auto_create_network = false` removes it either way.
+- **Log bucket with analytics taints on create** (hit on the first apply, 2026-09-28): creation is
+  asynchronous, the provider's follow-up update fails with "Buckets must be in an ACTIVE state", and
+  the bucket is tainted. Re-applying replaces it, and a deleted log bucket sits in `DELETE_REQUESTED`
+  for 7 days with its name blocked. Recovery: `gcloud logging buckets undelete`, then
+  `terraform untaint`. Noted in `logging.tf`.
+- **Cost:** folders, projects, IAM and org policies are free. Audit-log ingestion is a few MB/month,
+  well inside Cloud Logging's free 50 GiB per project.
