@@ -1,16 +1,20 @@
-variable "project_id" {
-  description = "GCP project ID (no default — every resource here bills to it)"
+# The project comes from 1-org and the region, network and CIDRs from
+# 2-networks, so nothing here is required and `make up` needs no tfvars.
+
+variable "seed_project_id" {
+  description = "Home project of the stage SAs (0-bootstrap)"
   type        = string
+  default     = "gk-argus-boot-seed"
 }
 
-variable "region" {
-  description = "GCP region. us-west1 is Oregon, matching the AWS side, and is in the low-cost tier"
+variable "prefix" {
+  description = "Naming prefix shared by every landing-zone resource (docs/gcp-port-design.md §12)"
   type        = string
-  default     = "us-west1"
+  default     = "gk-argus"
 }
 
 variable "zone" {
-  description = "Zone for the zonal cluster (one zonal cluster is covered by the GKE free tier)"
+  description = "Zone for the zonal cluster (one zonal cluster is covered by the GKE free tier). Must be in the shared subnet's region"
   type        = string
   default     = "us-west1-b"
 }
@@ -25,6 +29,12 @@ variable "machine_type" {
   description = "Node machine type. e2-standard-2 over e2-medium: shared-core CPU would skew CPU-stress chaos results"
   type        = string
   default     = "e2-standard-2"
+}
+
+variable "use_spot" {
+  description = "Spot nodes (~60-90% cheaper, preemptible any time). Set false if the billing account has no Spot quota — free trials often don't"
+  type        = bool
+  default     = true
 }
 
 variable "node_desired_size" {
@@ -47,30 +57,6 @@ variable "node_disk_size_gb" {
   description = "Boot disk per node (GKE default is 100 GB; 50 is plenty for a sandbox)"
   type        = number
   default     = 50
-}
-
-variable "subnet_cidr" {
-  description = "Primary node range"
-  type        = string
-  default     = "10.10.0.0/20"
-}
-
-variable "pods_cidr" {
-  description = "Secondary range for pods"
-  type        = string
-  default     = "10.20.0.0/16"
-}
-
-variable "services_cidr" {
-  description = "Secondary range for services"
-  type        = string
-  default     = "10.30.0.0/20"
-}
-
-variable "master_ipv4_cidr_block" {
-  description = "/28 for the managed control plane (private nodes require it)"
-  type        = string
-  default     = "172.16.0.0/28"
 }
 
 variable "datapath_provider" {

@@ -11,7 +11,7 @@ output "location" {
 }
 
 output "kubeconfig_command" {
-  value = "gcloud container clusters get-credentials ${google_container_cluster.argus.name} --zone ${var.zone} --project ${var.project_id}"
+  value = "gcloud container clusters get-credentials ${google_container_cluster.argus.name} --zone ${var.zone} --project ${local.project_id}"
 }
 
 output "artifact_uri" {
@@ -28,6 +28,7 @@ output "helm_values" {
   }
 }
 
+# The shared VPC in the host project (2-networks), not one this stage owns.
 output "network" {
-  value = google_compute_network.vpc.name
+  value = local.net.network
 }

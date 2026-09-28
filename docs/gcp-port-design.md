@@ -180,6 +180,9 @@ monitoring stack; net session cost still roughly halves because of the control p
 
 ## 8. Changes by file
 
+> Superseded for `terraform/gcp/`: the root now lives in `terraform/gcp/3-apps/`, one stage of a
+> landing zone. See §12–16. The Helm, deploy and CI items below still apply.
+
 **New — `terraform/gcp/`**
 ```
 versions.tf    google ~> 6.x provider, required_version >= 1.7, default labels
@@ -268,3 +271,406 @@ gcloud compute disks list; gcloud compute forwarding-rules list    # both empty 
 
 Still to confirm during the build: the GKE value for `DISK_MOUNTPOINT` (R3), checked against
 `node_filesystem_*` on a live COS node.
+
+## 12. Landing zone and naming (2026-09-28)
+
+The GCP side moves from a single standalone project to a small landing zone, modelled on Google's
+`terraform-example-foundation` but trimmed to what a portfolio budget can carry idle.
+
+**Organization:** `gklabs.fyi` (Cloud Identity Free). Daily work runs as `gk@gklabs.fyi`
+(Organization Administrator, Folder Admin, Project Creator, Billing Account Administrator);
+`admin@gklabs.fyi` is the break-glass super-admin. 2-Step Verification is enforced org-wide.
+
+**Naming:** `{prefix}-{env}-{name}`, prefix `gk-argus`, full-word environment codes, no random
+suffix. The prefix alone carries global uniqueness; the longest ID is 25 of the 30 allowed
+characters. Folder names need not be globally unique, so they are the bare environment words.
+
+```
+gklabs.fyi  (Organization)
+├── boot/
+│   └── gk-argus-boot-seed
+├── shared/
+│   └── gk-argus-shared-ops
+└── nonprod/
+    ├── gk-argus-nonprod-net-host      (Shared VPC host)
+    └── gk-argus-nonprod-gke-apps      (Shared VPC service project)
+```
+
+| Project ID | Foundation equivalent | Holds |
+|---|---|---|
+| `gk-argus-boot-seed` | prj-b-seed + prj-b-cicd | Terraform state bucket, per-stage Terraform SAs, WIF for GitHub Actions |
+| `gk-argus-shared-ops` | prj-c-logging + prj-c-security | Aggregated log sink and bucket, KMS, Secret Manager |
+| `gk-argus-nonprod-net-host` | prj-n-net-host | VPC, subnet, GKE secondary ranges, Cloud NAT/Router, firewall |
+| `gk-argus-nonprod-gke-apps` | prj-n-gke-apps | GKE cluster, MLflow artifact bucket, Workload Identity |
+
+Supporting names: state bucket `gk-argus-boot-tfstate`; stage service accounts `sa-tf-org`,
+`sa-tf-net`, `sa-tf-apps` in the seed project; WIF pool/provider `github-pool` / `github-oidc`.
+
+**Deferred, no renames needed to add them:** `prod/` (`gk-argus-prod-net-host`,
+`gk-argus-prod-gke-apps`), the network hub, Interconnect, VPC Service Controls, sandboxes.
+
+**Consequences, still to plan:**
+- Supersedes D10: state moves to `gk-argus-boot-tfstate` once the seed project exists.
+- `network.tf` moves out of the app root into the net-host project; the cluster consumes the
+  host's shared subnet. `terraform/gcp/` splits into stage roots (bootstrap → org → networks → apps).
+- Only the seed project is created by hand; everything after it goes through Terraform.
+
+## 13. Stage `0-bootstrap` (plan, 2026-09-28)
+
+**Purpose:** the only stage applied from a laptop. It puts the Terraform control plane into
+`gk-argus-boot-seed`: the state bucket, one service account per later stage, and keyless GitHub
+access. Every later stage runs as its own service account, locally by impersonation or from CI via
+WIF, and never as `gk@` directly.
+
+**Location:** `terraform/gcp/0-bootstrap/`. The existing `terraform/gcp/` root stays untouched
+until the networks and apps stages replace it; it becomes `3-apps`.
+
+### Resources (all in `gk-argus-boot-seed`)
+
+| Resource | Name | Notes |
+|---|---|---|
+| APIs | — | `cloudresourcemanager`, `serviceusage`, `iam`, `iamcredentials`, `sts`, `storage`, `cloudbilling` |
+| State bucket | `gk-argus-boot-tfstate` | `us-west1`; versioning on; uniform bucket-level access; public access prevention enforced; keep the last 10 noncurrent versions; `prevent_destroy` |
+| Stage SAs | `sa-tf-org`, `sa-tf-net`, `sa-tf-apps` | `roles/storage.objectUser` on the state bucket, each with its own state prefix |
+| Impersonation | — | `gk@gklabs.fyi` gets `roles/iam.serviceAccountTokenCreator` on each stage SA |
+| WIF pool / provider | `github-pool` / `github-oidc` | Issuer `token.actions.githubusercontent.com`; `attribute_condition` pins `assertion.repository_id` (not the name, which a rename could let someone reclaim) and `assertion.repository_owner_id` |
+| WIF bindings | — | `roles/iam.workloadIdentityUser` on each stage SA for `principalSet://…/attribute.repository_id/1298937726` (the repo's numeric ID) |
+
+### Least privilege: grant only what exists yet
+Bootstrap grants **org-level** roles to `sa-tf-org` only, because that is all that exists before
+stage 1:
+
+- `roles/resourcemanager.folderAdmin`, `roles/resourcemanager.projectCreator`,
+  `roles/orgpolicy.policyAdmin`, `roles/logging.configWriter` (org log sink),
+  `roles/resourcemanager.organizationViewer` — on the organization
+- `roles/billing.user` — on billing account `0149B6-C91A10-9BA988`
+
+`sa-tf-net` and `sa-tf-apps` get **no** roles here. Stage `1-org` creates `shared/`, `nonprod/` and
+the three projects, and grants them their roles scoped to what it just made:
+
+- `sa-tf-net`: `compute.networkAdmin`, `compute.securityAdmin` on the net-host project;
+  `compute.xpnAdmin` on the `nonprod/` folder (Shared VPC admin must be granted at folder or org level)
+- `sa-tf-apps`: `container.admin`, `storage.admin`, `iam.serviceAccountAdmin`,
+  `resourcemanager.projectIamAdmin` on gke-apps
+
+The cost of this rule is that `1-org` needs `resourcemanager.projectIamAdmin` on the projects it
+creates. It already has it, because the project creator is granted Owner.
+
+### Inputs and outputs
+- **Variables:** `org_id` (`82940792361`), `billing_account`, `seed_project_id`, `region`, `prefix`,
+  `github_repository_id`, `github_owner_id`, `admin_principal`
+  (`user:gk@gklabs.fyi`). Real values live in the gitignored `terraform.tfvars`; `example.tfvars`
+  documents them.
+- **Provider:** user ADC with `user_project_override = true` and `billing_project` set to the seed
+  project, so org-level API calls bill quota to the seed project rather than failing.
+- **Outputs:** state bucket name, the three SA emails, the WIF provider resource name. Later stages
+  read these, and GitHub Actions stores them as repository variables (not secrets; none are sensitive).
+
+### Apply sequence (once, as `gk@`)
+1. `terraform init && terraform apply` with local state.
+2. Uncomment `backend.tf` (`bucket = "gk-argus-boot-tfstate"`, `prefix = "0-bootstrap"`), then
+   `terraform init -migrate-state`. The stage now stores its own state in the bucket it created.
+3. Delete the local `terraform.tfstate*`.
+4. Record the outputs as GitHub repository variables.
+
+### Not in bootstrap
+- **Not in `make up|down`.** This stage is never destroyed as part of the cluster lifecycle; the
+  bucket is `prevent_destroy`. Tearing it down is a deliberate manual act.
+- **CMEK on the state bucket:** deferred. It needs a KMS key ring, and the diagram puts KMS in
+  `shared-ops`, which does not exist until stage 1. Google-managed encryption for now.
+- **Org policies** (`iam.disableServiceAccountKeyCreation`, `compute.vmExternalIpAccess`,
+  `gcp.resourceLocations`): belong to `1-org`.
+- **CI apply pipeline:** later. The plan is `plan` on PR and `apply` on merge to `main`, with a
+  GitHub Environment gate; the WIF binding can then be tightened to `attribute.ref == refs/heads/main`
+  for the apply job.
+
+### Gotchas
+- **WIF pool IDs are soft-deleted for 30 days** and cannot be reused in that window. A destroy and
+  re-apply needs a new pool ID.
+- **The seed project stays out of Terraform.** It was created by hand and is referenced by ID;
+  importing it would let a stray `destroy` take out the state bucket's home.
+- **Cost:** a few cents a month for the bucket. SAs, WIF and IAM are free.
+
+### Files and CI
+`terraform/gcp/0-bootstrap/`: `versions.tf`, `backend.tf` (commented until step 2), `variables.tf`,
+`apis.tf`, `state.tf`, `service_accounts.tf`, `wif.tf`, `outputs.tf`, `example.tfvars`.
+CI: add `gcp/0-bootstrap` to the `terraform` validate matrix in `.github/workflows/ci.yaml`.
+
+## 14. Stage `1-org` (plan, 2026-09-28)
+
+**Purpose:** build the rest of the hierarchy (folders, projects, guardrails, central audit
+logging) and hand the later stages exactly the roles they need on what it creates. First stage
+that runs as a robot: `gk@` impersonates `sa-tf-org`, locally now and from CI later.
+
+**Location:** `terraform/gcp/1-org/`. State at `gs://gk-argus-boot-tfstate/1-org/`, remote from
+the first apply (the bucket exists, so no migration step this time). The backend and provider
+both set `impersonate_service_account = sa-tf-org@…`. Bootstrap outputs (SA emails) are read with
+`terraform_remote_state` from the `0-bootstrap` prefix, not copied into tfvars.
+
+### Resources
+
+**Folders** (under `gklabs.fyi`): `shared`, `nonprod`.
+
+**Projects** (all linked to billing `0149B6-C91A10-9BA988`, `auto_create_network = false`,
+label `environment`):
+
+| Project | Folder | APIs enabled here |
+|---|---|---|
+| `gk-argus-shared-ops` | `shared/` | `logging`, `cloudkms`, `secretmanager` |
+| `gk-argus-nonprod-net-host` | `nonprod/` | `compute`, `container` (both Shared VPC host and service project need it for GKE) |
+| `gk-argus-nonprod-gke-apps` | `nonprod/` | `compute`, `container`, `iam`, `storage` |
+
+APIs for the workload projects move here from the app root's `apis.tf`, so `sa-tf-apps` doesn't
+need `serviceUsageAdmin`. Projects keep the provider-default `deletion_policy = "PREVENT"`: a stray
+`destroy` fails instead of deleting a project. Tearing one down means flipping it to `DELETE` first,
+deliberately.
+
+**Org policies** (`google_org_policy_policy`, at the organization, created before the projects):
+
+| Constraint | Setting | Why |
+|---|---|---|
+| `iam.automaticIamGrantsForDefaultServiceAccounts` | enforce (imported) | Stops the default Compute SA getting project Editor; nodes already use their own SA |
+| `compute.skipDefaultNetworkCreation` | enforce | No wide-open `default` VPC in new projects |
+| `compute.vmExternalIpAccess` | deny all | Nodes are already private (`enable_private_nodes = true`); egress goes via NAT |
+| `compute.requireOsLogin` | enforce | SSH through IAM, never project-wide keys |
+| `storage.uniformBucketLevelAccess` | enforce (imported) | Both buckets already comply |
+| `storage.publicAccessPrevention` | enforce | Both buckets already comply |
+| `gcp.resourceLocations` | `in:us-locations` | Everything runs in `us-west1` |
+
+Google already enforces a "secure by default" set on new organizations. Two of those match ours
+exactly and are adopted with `import` blocks (`imports.tf`) instead of failing on "already exists";
+destroying this stage would delete them. The rest stay Google's and are not managed here:
+`iam.managed.disableServiceAccountKeyCreation` (so no key-creation policy of our own),
+`iam.disableServiceAccountKeyUpload`, `iam.allowedPolicyMemberDomains`,
+`essentialcontacts.managed.allowedContactDomains`,
+`compute.managed.restrictProtocolForwardingCreationForTypes`.
+
+**Central audit logging:**
+- **Log bucket:** `org-audit` in `gk-argus-shared-ops`, `us-west1`, 30-day retention (the free
+  tier), Log Analytics enabled (free queries).
+- **Org sink:** `org-audit-sink` with `include_children = true` and a filter on
+  `logName:"cloudaudit.googleapis.com"`. It copies Admin Activity, System Event and Policy Denied
+  audit logs from every project into that bucket. Data Access logs stay off, because they are the
+  expensive ones.
+- **Writer grant:** the sink's writer identity gets `roles/logging.bucketWriter` on `shared-ops`.
+- **Retention not locked:** a locked bucket can't be shortened or deleted until retention
+  expires. That's right for PHI, but not for a sandbox.
+
+**Stage SA grants** (scoped to what this stage just created):
+
+| SA | Scope | Roles |
+|---|---|---|
+| `sa-tf-net` | `nonprod/` folder | `compute.xpnAdmin` (Shared VPC admin: enable host, attach service projects, grant subnet `networkUser`) |
+| `sa-tf-net` | net-host project | `compute.networkAdmin`, `compute.securityAdmin`, `resourcemanager.projectIamAdmin` (for GKE's `hostServiceAgentUser` grant) |
+| `sa-tf-apps` | gke-apps project | `container.admin`, `storage.admin`, `iam.serviceAccountAdmin`, `iam.serviceAccountUser` (node pool uses the node SA), `resourcemanager.projectIamAdmin` (node SA roles, MLflow bucket binding) |
+
+`sa-tf-org` itself needs nothing new on the projects: creating a project makes the creator Owner.
+
+**Outputs:** folder IDs; project IDs and **numbers** (stage 2 needs the gke-apps number to grant
+its GKE and Cloud Services agents `networkUser` on the shared subnet); log bucket name.
+
+**Budget** (`google_billing_budget`, whole billing account): `gk-argus monthly`, $100/month,
+alerts at 25/50/90/100% of actual spend and 100% of forecast. It measures spend **before credits**
+(`EXCLUDE_ALL_CREDITS`): with credits included, a free-trial account reads $0 until the $300 is
+gone, so no alert would fire in time. Alerts go to billing admins by default, but `gk@` and
+`admin@` have no mailboxes, so `budget_alert_emails` adds Cloud Monitoring email channels
+(in `shared-ops`) for a real inbox.
+
+### Not in this stage
+- **Shared VPC host enablement and service project attachment:** stage `2-networks`, as `sa-tf-net`.
+- **KMS key ring:** key rings can never be deleted, so the name is created once, when CMEK is
+  actually needed.
+- **Domain-restricted sharing** (`iam.allowedPolicyMemberDomains`): already enforced by Google's
+  defaults, allowing only `gklabs.fyi` principals. The WIF `principalSet` bindings applied under it
+  without trouble. Budget email channels aren't IAM grants, so a Gmail inbox still works there.
+- **Resource Manager `environment` tags:** later. The `environment` label covers reporting for now.
+
+### Bootstrap changes this needs
+Calls made as a service account bill quota to the SA's home project (the seed), so the seed needs
+three more APIs: `orgpolicy`, `logging` and `billingbudgets`. `sa-tf-org` also gets
+`roles/billing.costsManager` on the billing account to own the budget. A `moved` block keeps the
+existing `billing.user` grant when that resource becomes a `for_each`. Applied as `gk@` before
+stage 1.
+
+### Apply sequence
+1. `0-bootstrap`: add the two APIs, then `apply`.
+2. `1-org`: `init`, `plan`, `apply` as `gk@`, which impersonates `sa-tf-org` automatically. Org
+   policies take a few minutes to propagate; the projects depend on them, but a retry may still
+   be needed.
+3. Check in the console: two new folders, three projects, the sink showing in Log Router, and the
+   policies under Organization Policies.
+
+### Risks
+- **Billing account project quota:** trial billing accounts allow only a few linked projects.
+  `gk-argus-boot-seed` and `My First Project` already use two. Shutting down `My First Project`
+  first leaves room.
+- **Policy propagation:** a project created in the propagation window may briefly get a default
+  network. `auto_create_network = false` removes it either way.
+- **Log bucket with analytics taints on create** (hit on the first apply, 2026-09-28): creation is
+  asynchronous, the provider's follow-up update fails with "Buckets must be in an ACTIVE state", and
+  the bucket is tainted. Re-applying replaces it, and a deleted log bucket sits in `DELETE_REQUESTED`
+  for 7 days with its name blocked. Recovery: `gcloud logging buckets undelete`, then
+  `terraform untaint`. Noted in `logging.tf`.
+- **Cost:** folders, projects, IAM and org policies are free. Audit-log ingestion is a few MB/month,
+  well inside Cloud Logging's free 50 GiB per project.
+
+## 15. Stage `2-networks` (plan, 2026-09-28)
+
+**Purpose:** move the network out of the single-project app root into the Shared VPC host, and
+let GKE in `gk-argus-nonprod-gke-apps` use it. After this stage the app root (stage 3) creates no
+network of its own; it only references the shared subnet.
+
+**Location:** `terraform/gcp/2-networks/`. State at `gs://gk-argus-boot-tfstate/2-networks/`. Runs as
+`sa-tf-net` (backend and provider both impersonate it). Reads `1-org` outputs (project IDs and the
+gke-apps project **number**) with `terraform_remote_state`.
+
+### Resources
+
+**Shared VPC:**
+- `google_compute_shared_vpc_host_project`: net-host becomes a host.
+- `google_compute_shared_vpc_service_project`: gke-apps attaches to it.
+- Both need `compute.xpnAdmin`, which `sa-tf-net` has on the `nonprod/` folder.
+
+**Network** (in `gk-argus-nonprod-net-host`, `us-west1`). Names are per project, so no prefix:
+
+| Resource | Name | Settings |
+|---|---|---|
+| VPC | `nonprod-vpc` | custom mode (`auto_create_subnetworks = false`) |
+| Subnet | `gke-usw1` | `10.10.0.0/20` nodes; secondary `pods` `10.20.0.0/16`, `services` `10.30.0.0/20`; Private Google Access on; flow logs off (cost) |
+| Cloud Router | `nonprod-router-usw1` | Free and holds no IP, so it lives with the network |
+
+**Cloud NAT lives in stage 3, with the cluster** (decided 2026-09-28). An idle NAT still bills for
+its external IP, so it's created by `make up` and removed by `make down`, as today. Stage 3 attaches
+it to the router above. That means `sa-tf-apps` changes one thing in the host project, so stage 1
+grants it a project-level custom role `natOperator` on net-host with only
+`compute.routers.{get,list,update}` and `compute.regionOperations.get`, instead of
+`compute.networkAdmin`, which could also rewrite the VPC. `sa-tf-org` can define that role because
+it owns net-host.
+
+The CIDRs are the ones the app root already uses, so nothing in the Helm charts or runbooks
+changes. The secondary range names stay `pods` and `services`, which `gke.tf` already references.
+The control plane's `/28` (`172.16.0.0/28`) is not a subnet range. It stays a cluster setting in
+stage 3, and is exported from here only as a reserved-range note so nothing else overlaps it.
+
+**GKE on a Shared VPC: IAM the host must grant** (per Google's Shared VPC GKE setup). With
+`207144179797` as the gke-apps project number:
+
+| Principal | Role | Scope | Why |
+|---|---|---|---|
+| `service-207144179797@container-engine-robot.iam.gserviceaccount.com` (GKE service agent) | `compute.networkUser` | subnet `gke-usw1` | Place nodes and pods in the shared subnet |
+| same | `container.hostServiceAgentUser` | net-host project | Manage the network resources GKE owns in the host |
+| same | `compute.securityAdmin` | net-host project | Let GKE create and maintain its own firewall rules (control plane → nodes for webhooks, health checks, intra-cluster) |
+| `207144179797@cloudservices.gserviceaccount.com` (Google APIs service agent) | `compute.networkUser` | subnet `gke-usw1` | Managed instance groups for node pools |
+| `sa-tf-apps` | `compute.networkUser` | subnet `gke-usw1` | Stage 3 creates the cluster against this subnet |
+
+**Firewall choice:** GKE on a Shared VPC can't create firewall rules in the host unless you let it.
+The alternative is to hand-maintain rules for control-plane webhook ports (Chaos Mesh, cert-manager
+style admission webhooks), health checks and pod ranges, and to find out which one is missing only
+when something silently fails. Granting the GKE service agent `compute.securityAdmin` on the host is
+Google's documented option and the right trade for one cluster in a nonprod host. A custom role
+limited to firewall permissions is the tighter version. It needs `iam.roleAdmin`, which no stage SA
+holds, so it's deferred.
+
+`sa-tf-net` can make all of these grants: `resourcemanager.projectIamAdmin` on net-host (from stage
+1) for the project-level ones, and `compute.xpnAdmin` for the subnet-level `networkUser` bindings.
+
+**Outputs:** network and subnet self-links, secondary range names, region, and the reserved
+control-plane CIDR. Stage 3 reads these instead of creating its own VPC.
+
+### Not in this stage
+- **Network hub / NCC / Interconnect / DNS:** deferred with the rest of the full landing zone.
+- **Hand-written firewall rules:** none. The VPC's implied deny-ingress stays, and GKE manages its
+  own rules. No SSH rule: OS Login is enforced and nothing here needs a shell.
+- **VPC Service Controls:** deferred.
+- **Refactoring `terraform/gcp/` into `3-apps`:** the next stage. Until then that root still builds
+  its own VPC if applied, so don't run `make up CLOUD=gcp` against the new projects yet.
+
+### Risks
+- **GKE service agent may not exist yet.** It is created when the Container API is enabled, which
+  stage 1 did, but granting IAM to it can fail with "does not exist" if it hasn't propagated.
+  `google_project_service_identity` would force it but needs the beta provider; re-running apply
+  after a minute is simpler.
+- **Domain-restricted sharing** (`iam.allowedPolicyMemberDomains`): Google service agents are
+  granted fine under it (the logging sink's writer identity was, in stage 1).
+- **Cost:** everything in this stage is free while idle. NAT charges start and stop with the
+  cluster in stage 3.
+
+## 16. Stage `3-apps` (plan, 2026-09-28)
+
+**Purpose:** turn the single-project app root into the landing zone's workload stage. The cluster,
+node SA and MLflow bucket go into `gk-argus-nonprod-gke-apps` on the shared subnet from stage 2,
+and Cloud NAT comes and goes with them. This is the only stage `make up|down CLOUD=gcp` touches;
+stages 0–2 persist between sessions.
+
+**Location:** `git mv terraform/gcp/*.tf terraform/gcp/3-apps/`, which keeps history. The old root
+was never applied (no state), so there is nothing to migrate. State goes to
+`gs://gk-argus-boot-tfstate/3-apps/`, remote from the first apply. Runs as `sa-tf-apps` (backend
+and provider both impersonate it). Reads `1-org` (project ID and number) and `2-networks` (network,
+subnet, range names, router, control-plane CIDR) with `terraform_remote_state`.
+
+### Changes by file (inside `3-apps/`)
+
+| File | Change |
+|---|---|
+| `apis.tf` | **Deleted.** Stage 1 enables the same four APIs on gke-apps; every `depends_on = [google_project_service.required]` goes with it |
+| `network.tf` | VPC, subnet and router **removed** (stage 2 owns them). Keeps one resource: `google_compute_router_nat` `nonprod-nat-usw1` on `nonprod-router-usw1` in the **host** project, same settings as today (`AUTO_ONLY`, all ranges, logs off). `sa-tf-apps` can do this only through the `natOperator` role from stage 1 |
+| `gke.tf` | `network`/`subnetwork` from stage 2; `master_ipv4_cidr_block` from stage 2's output; the node pool `depends_on` the NAT, so `destroy` removes nodes before their egress. Picks up the uncommitted `use_spot` change |
+| `storage.tf` | Unchanged apart from the project. Bucket becomes `argus-artifacts-gk-argus-nonprod-gke-apps` (41 of 63 chars) |
+| `versions.tf` | GCS backend, prefix `3-apps`; provider impersonates `sa-tf-apps`; `project` from stage 1's output; two `terraform_remote_state` blocks |
+| `variables.tf` | **Removed:** `project_id` (from stage 1), `subnet_cidr`, `pods_cidr`, `services_cidr`, `master_ipv4_cidr_block` (all stage 2). **Kept:** region, zone, cluster name, machine type, `use_spot`, node sizes, datapath, `master_authorized_cidrs`. Nothing is required any more, so no `terraform.tfvars` is needed |
+| `outputs.tf` | **Same five contract outputs** as `terraform/aws` (`cluster_name`, `location`, `kubeconfig_command`, `artifact_uri`, `helm_values`), plus `network`, now the shared VPC. `kubeconfig_command` already carries `--project` |
+| `example.tfvars` | `project_id` line removed; the rest stays as override docs |
+
+### Changes outside the stage
+
+- **`Makefile`:** `TF_DIR` becomes per cloud (`aws` → `terraform/aws`, `gcp` → `terraform/gcp/3-apps`)
+  and is passed to `deploy.sh`. The post-`down` verification lines gain `--project` flags and a
+  firewall check on the host, where GKE's own rules live:
+  `gcloud compute firewall-rules list --project gk-argus-nonprod-net-host`.
+- **`scripts/deploy.sh`: bug fix.** It currently reads Terraform outputs only
+  `if [ -f "terraform/$CLOUD/terraform.tfstate" ]`. With remote state there is never a local file,
+  so the check would silently fall back to "PVC-local artifacts" and MLflow would never use GCS.
+  It changes to "`terraform output` succeeds", using `TF_DIR` from the Makefile. That's correct for
+  local state (AWS) and remote state (GCP) alike.
+- **CI:** matrix entry `gcp` → `gcp/3-apps`. `terraform/gcp/` itself no longer holds a root.
+- **Docs:** README line 68 (`CLOUD=gcp gives VPC + GKE + GCS` → GKE + GCS on the landing zone's
+  shared VPC); §8 of this doc gets a pointer to §16.
+
+### Stage 1 change this needs: a human operator on the workload project
+`gk@` has org-level roles only, and none of them includes GKE or project read access. That breaks
+`make kubeconfig` (`get-credentials`), every `kubectl` call behind `make deploy` and `make down`'s
+PVC and LB cleanup, and the post-`down` `gcloud compute disks list`. Terraform itself is fine,
+because it impersonates `sa-tf-apps`.
+
+`1-org` grants a new `operators` variable (default `["user:gk@gklabs.fyi"]`) on the **`nonprod/`
+folder**: `roles/container.admin` (cluster credentials and full Kubernetes RBAC) and
+`roles/viewer` (disks, forwarding rules, logs). It covers nonprod projects only, never `boot/` or
+`shared/`.
+
+### Risks
+- **Free-trial vCPU cap:** trial accounts are limited to about 8 concurrent vCPUs. Three
+  `e2-standard-2` nodes use 6, and the autoscaler's max of 4 reaches 8. The default pool GKE
+  creates and removes during cluster creation is gone before the managed pool starts, so the peak
+  is 6. If apply fails on quota: fewer nodes, `use_spot = false`, or upgrade the account (the
+  credit is kept).
+- **Spot quota:** already handled by `use_spot` (uncommitted change, carried over).
+- **NAT permissions (hit on the first `make up`):** creating a NAT also needs
+  `compute.networks.updatePolicy` on the VPC, now in `natOperator`. On its own it can't create
+  firewall rules, which need `compute.firewalls.create`.
+- **Node pool read-back (hit on the first `make up`):** GKE creates the pool as its own service
+  agent, but the provider then reads the instance group as `sa-tf-apps`, which needs
+  `compute.instanceGroupManagers.get`. `roles/compute.viewer` (read-only) was added on gke-apps. The
+  failed read tainted a healthy pool; it was untainted rather than rebuilt.
+- **Workload Identity pool timing (hit on the first `make up`):** the MLflow bucket binding names
+  `<project>.svc.id.goog`, which exists only once the cluster does. The binding now
+  `depends_on` the cluster; nothing in its member string implied the ordering.
+- **Org policies vs. GKE:** private nodes satisfy `vmExternalIpAccess`, `us-west1-b` satisfies
+  `resourceLocations`, and node images are unaffected by `requireOsLogin`. Worth watching on the
+  first `make up`, because this is the first workload under the guardrails.
+- **Teardown completeness:** GKE deletes the firewall rules it created in the host when the cluster
+  is deleted. The new host-project firewall check in `make down`'s output confirms it.
+
+### Acceptance
+`make up CLOUD=gcp` → nodes `Ready` → `make deploy CLOUD=gcp` prints a `gs://` artifact URI (proof
+the `deploy.sh` fix works) → the §10 parity run → `make down CLOUD=gcp` → the three verification
+lists are empty, and stages 0–2 still show "No changes".

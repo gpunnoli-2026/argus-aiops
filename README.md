@@ -65,7 +65,7 @@ Anthropic Claude (RAG-grounded diagnostic narrative) · GitHub Actions ·
 ## Quickstart
 
 ```bash
-make up CLOUD=aws       # provision VPC + EKS + S3 (~15 min) — CLOUD=gcp gives VPC + GKE + GCS
+make up CLOUD=aws       # provision VPC + EKS + S3 (~15 min) — CLOUD=gcp gives GKE + GCS on the landing zone's shared VPC (docs/gcp-port-design.md §12–16)
 make deploy CLOUD=aws   # observability stack, demo app, chaos tooling, Argus services
 make load               # baseline traffic (bake ≥2h before first training)
 make train              # train anomaly models, register in MLflow (@production)
