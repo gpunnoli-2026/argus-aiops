@@ -1,10 +1,9 @@
-# Step 2 of the apply sequence (docs/gcp-port-design.md §13): after the first
-# apply creates the bucket, uncomment this and run `terraform init -migrate-state`.
-# Until then state is local, because the bucket it would live in doesn't exist.
-#
-# terraform {
-#   backend "gcs" {
-#     bucket = "gk-argus-boot-tfstate"
-#     prefix = "0-bootstrap"
-#   }
-# }
+# This stage stores its state in the bucket it creates. The very first apply ran
+# with local state (the bucket didn't exist yet) and was then moved here with
+# `terraform init -migrate-state` (docs/gcp-port-design.md §13).
+terraform {
+  backend "gcs" {
+    bucket = "gk-argus-boot-tfstate"
+    prefix = "0-bootstrap"
+  }
+}
