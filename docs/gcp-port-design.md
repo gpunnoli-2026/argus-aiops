@@ -268,3 +268,127 @@ gcloud compute disks list; gcloud compute forwarding-rules list    # both empty 
 
 Still to confirm during the build: the GKE value for `DISK_MOUNTPOINT` (R3), checked against
 `node_filesystem_*` on a live COS node.
+
+## 12. Landing zone and naming (2026-09-28)
+
+The GCP side moves from a single standalone project to a small landing zone, modelled on Google's
+`terraform-example-foundation` but trimmed to what a portfolio budget can carry idle.
+
+**Organization:** `gklabs.fyi` (Cloud Identity Free). Daily work runs as `gk@gklabs.fyi`
+(Organization Administrator, Folder Admin, Project Creator, Billing Account Administrator);
+`admin@gklabs.fyi` is the break-glass super-admin. 2-Step Verification is enforced org-wide.
+
+**Naming:** `{prefix}-{env}-{name}`, prefix `gk-argus`, full-word environment codes, no random
+suffix. The prefix alone carries global uniqueness; the longest ID is 25 of the 30 allowed
+characters. Folder names need not be globally unique, so they are the bare environment words.
+
+```
+gklabs.fyi  (Organization)
+├── boot/
+│   └── gk-argus-boot-seed
+├── shared/
+│   └── gk-argus-shared-ops
+└── nonprod/
+    ├── gk-argus-nonprod-net-host      (Shared VPC host)
+    └── gk-argus-nonprod-gke-apps      (Shared VPC service project)
+```
+
+| Project ID | Foundation equivalent | Holds |
+|---|---|---|
+| `gk-argus-boot-seed` | prj-b-seed + prj-b-cicd | Terraform state bucket, per-stage Terraform SAs, WIF for GitHub Actions |
+| `gk-argus-shared-ops` | prj-c-logging + prj-c-security | Aggregated log sink and bucket, KMS, Secret Manager |
+| `gk-argus-nonprod-net-host` | prj-n-net-host | VPC, subnet, GKE secondary ranges, Cloud NAT/Router, firewall |
+| `gk-argus-nonprod-gke-apps` | prj-n-gke-apps | GKE cluster, MLflow artifact bucket, Workload Identity |
+
+Supporting names: state bucket `gk-argus-boot-tfstate`; stage service accounts `sa-tf-org`,
+`sa-tf-net`, `sa-tf-apps` in the seed project; WIF pool/provider `github-pool` / `github-oidc`.
+
+**Deferred, no renames needed to add them:** `prod/` (`gk-argus-prod-net-host`,
+`gk-argus-prod-gke-apps`), the network hub, Interconnect, VPC Service Controls, sandboxes.
+
+**Consequences, still to plan:**
+- Supersedes D10: state moves to `gk-argus-boot-tfstate` once the seed project exists.
+- `network.tf` moves out of the app root into the net-host project; the cluster consumes the
+  host's shared subnet. `terraform/gcp/` splits into stage roots (bootstrap → org → networks → apps).
+- Only the seed project is created by hand; everything after it goes through Terraform.
+
+## 13. Stage `0-bootstrap` (plan, 2026-09-28)
+
+**Purpose:** the only stage applied from a laptop. It puts the Terraform control plane into
+`gk-argus-boot-seed`: the state bucket, one service account per later stage, and keyless GitHub
+access. Every later stage runs as its own service account, locally by impersonation or from CI via
+WIF, and never as `gk@` directly.
+
+**Location:** `terraform/gcp/0-bootstrap/`. The existing `terraform/gcp/` root stays untouched
+until the networks and apps stages replace it; it becomes `3-apps`.
+
+### Resources (all in `gk-argus-boot-seed`)
+
+| Resource | Name | Notes |
+|---|---|---|
+| APIs | — | `cloudresourcemanager`, `serviceusage`, `iam`, `iamcredentials`, `sts`, `storage`, `cloudbilling` |
+| State bucket | `gk-argus-boot-tfstate` | `us-west1`; versioning on; uniform bucket-level access; public access prevention enforced; keep the last 10 noncurrent versions; `prevent_destroy` |
+| Stage SAs | `sa-tf-org`, `sa-tf-net`, `sa-tf-apps` | `roles/storage.objectUser` on the state bucket, each with its own state prefix |
+| Impersonation | — | `gk@gklabs.fyi` gets `roles/iam.serviceAccountTokenCreator` on each stage SA |
+| WIF pool / provider | `github-pool` / `github-oidc` | Issuer `token.actions.githubusercontent.com`; `attribute_condition` pins `assertion.repository_id` (not the name, which a rename could let someone reclaim) and `assertion.repository_owner_id` |
+| WIF bindings | — | `roles/iam.workloadIdentityUser` on each stage SA for `principalSet://…/attribute.repository_id/1298937726` (the repo's numeric ID) |
+
+### Least privilege: grant only what exists yet
+Bootstrap grants **org-level** roles to `sa-tf-org` only, because that is all that exists before
+stage 1:
+
+- `roles/resourcemanager.folderAdmin`, `roles/resourcemanager.projectCreator`,
+  `roles/orgpolicy.policyAdmin`, `roles/logging.configWriter` (org log sink),
+  `roles/resourcemanager.organizationViewer` — on the organization
+- `roles/billing.user` — on billing account `0149B6-C91A10-9BA988`
+
+`sa-tf-net` and `sa-tf-apps` get **no** roles here. Stage `1-org` creates `shared/`, `nonprod/` and
+the three projects, and grants them their roles scoped to what it just made:
+
+- `sa-tf-net`: `compute.networkAdmin`, `compute.securityAdmin` on the net-host project;
+  `compute.xpnAdmin` on the `nonprod/` folder (Shared VPC admin must be granted at folder or org level)
+- `sa-tf-apps`: `container.admin`, `storage.admin`, `iam.serviceAccountAdmin`,
+  `resourcemanager.projectIamAdmin` on gke-apps
+
+The cost of this rule is that `1-org` needs `resourcemanager.projectIamAdmin` on the projects it
+creates. It already has it, because the project creator is granted Owner.
+
+### Inputs and outputs
+- **Variables:** `org_id` (`82940792361`), `billing_account`, `seed_project_id`, `region`, `prefix`,
+  `github_repository_id`, `github_owner_id`, `admin_principal`
+  (`user:gk@gklabs.fyi`). Real values live in the gitignored `terraform.tfvars`; `example.tfvars`
+  documents them.
+- **Provider:** user ADC with `user_project_override = true` and `billing_project` set to the seed
+  project, so org-level API calls bill quota to the seed project rather than failing.
+- **Outputs:** state bucket name, the three SA emails, the WIF provider resource name. Later stages
+  read these, and GitHub Actions stores them as repository variables (not secrets; none are sensitive).
+
+### Apply sequence (once, as `gk@`)
+1. `terraform init && terraform apply` with local state.
+2. Uncomment `backend.tf` (`bucket = "gk-argus-boot-tfstate"`, `prefix = "0-bootstrap"`), then
+   `terraform init -migrate-state`. The stage now stores its own state in the bucket it created.
+3. Delete the local `terraform.tfstate*`.
+4. Record the outputs as GitHub repository variables.
+
+### Not in bootstrap
+- **Not in `make up|down`.** This stage is never destroyed as part of the cluster lifecycle; the
+  bucket is `prevent_destroy`. Tearing it down is a deliberate manual act.
+- **CMEK on the state bucket:** deferred. It needs a KMS key ring, and the diagram puts KMS in
+  `shared-ops`, which does not exist until stage 1. Google-managed encryption for now.
+- **Org policies** (`iam.disableServiceAccountKeyCreation`, `compute.vmExternalIpAccess`,
+  `gcp.resourceLocations`): belong to `1-org`.
+- **CI apply pipeline:** later. The plan is `plan` on PR and `apply` on merge to `main`, with a
+  GitHub Environment gate; the WIF binding can then be tightened to `attribute.ref == refs/heads/main`
+  for the apply job.
+
+### Gotchas
+- **WIF pool IDs are soft-deleted for 30 days** and cannot be reused in that window. A destroy and
+  re-apply needs a new pool ID.
+- **The seed project stays out of Terraform.** It was created by hand and is referenced by ID;
+  importing it would let a stray `destroy` take out the state bucket's home.
+- **Cost:** a few cents a month for the bucket. SAs, WIF and IAM are free.
+
+### Files and CI
+`terraform/gcp/0-bootstrap/`: `versions.tf`, `backend.tf` (commented until step 2), `variables.tf`,
+`apis.tf`, `state.tf`, `service_accounts.tf`, `wif.tf`, `outputs.tf`, `example.tfvars`.
+CI: add `gcp/0-bootstrap` to the `terraform` validate matrix in `.github/workflows/ci.yaml`.
