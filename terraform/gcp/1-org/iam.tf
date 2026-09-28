@@ -50,3 +50,26 @@ resource "google_folder_iam_member" "net_xpn_admin" {
   role   = "roles/compute.xpnAdmin"
   member = "serviceAccount:${local.stage_sa["net"]}"
 }
+
+# Stage 3 attaches Cloud NAT to the host's router and removes it again with the
+# cluster, so an idle NAT doesn't bill for its IP. That needs router updates in
+# net-host and nothing else; compute.networkAdmin would also let it rewrite the
+# VPC. sa-tf-org can define a project-level role here because it owns net-host.
+resource "google_project_iam_custom_role" "nat_operator" {
+  project     = google_project.this["nonprod-net-host"].project_id
+  role_id     = "natOperator"
+  title       = "Cloud NAT operator"
+  description = "Add and remove Cloud NAT on existing routers; no other network changes"
+  permissions = [
+    "compute.regionOperations.get",
+    "compute.routers.get",
+    "compute.routers.list",
+    "compute.routers.update",
+  ]
+}
+
+resource "google_project_iam_member" "apps_nat_operator" {
+  project = google_project.this["nonprod-net-host"].project_id
+  role    = google_project_iam_custom_role.nat_operator.id
+  member  = "serviceAccount:${local.stage_sa["apps"]}"
+}

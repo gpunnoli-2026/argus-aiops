@@ -510,3 +510,84 @@ stage 1.
   `terraform untaint`. Noted in `logging.tf`.
 - **Cost:** folders, projects, IAM and org policies are free. Audit-log ingestion is a few MB/month,
   well inside Cloud Logging's free 50 GiB per project.
+
+## 15. Stage `2-networks` (plan, 2026-09-28)
+
+**Purpose:** move the network out of the single-project app root into the Shared VPC host, and
+let GKE in `gk-argus-nonprod-gke-apps` use it. After this stage the app root (stage 3) creates no
+network of its own; it only references the shared subnet.
+
+**Location:** `terraform/gcp/2-networks/`. State at `gs://gk-argus-boot-tfstate/2-networks/`. Runs as
+`sa-tf-net` (backend and provider both impersonate it). Reads `1-org` outputs (project IDs and the
+gke-apps project **number**) with `terraform_remote_state`.
+
+### Resources
+
+**Shared VPC:**
+- `google_compute_shared_vpc_host_project`: net-host becomes a host.
+- `google_compute_shared_vpc_service_project`: gke-apps attaches to it.
+- Both need `compute.xpnAdmin`, which `sa-tf-net` has on the `nonprod/` folder.
+
+**Network** (in `gk-argus-nonprod-net-host`, `us-west1`). Names are per project, so no prefix:
+
+| Resource | Name | Settings |
+|---|---|---|
+| VPC | `nonprod-vpc` | custom mode (`auto_create_subnetworks = false`) |
+| Subnet | `gke-usw1` | `10.10.0.0/20` nodes; secondary `pods` `10.20.0.0/16`, `services` `10.30.0.0/20`; Private Google Access on; flow logs off (cost) |
+| Cloud Router | `nonprod-router-usw1` | Free and holds no IP, so it lives with the network |
+
+**Cloud NAT lives in stage 3, with the cluster** (decided 2026-09-28). An idle NAT still bills for
+its external IP, so it's created by `make up` and removed by `make down`, as today. Stage 3 attaches
+it to the router above. That means `sa-tf-apps` changes one thing in the host project, so stage 1
+grants it a project-level custom role `natOperator` on net-host with only
+`compute.routers.{get,list,update}` and `compute.regionOperations.get`, instead of
+`compute.networkAdmin`, which could also rewrite the VPC. `sa-tf-org` can define that role because
+it owns net-host.
+
+The CIDRs are the ones the app root already uses, so nothing in the Helm charts or runbooks
+changes. The secondary range names stay `pods` and `services`, which `gke.tf` already references.
+The control plane's `/28` (`172.16.0.0/28`) is not a subnet range. It stays a cluster setting in
+stage 3, and is exported from here only as a reserved-range note so nothing else overlaps it.
+
+**GKE on a Shared VPC: IAM the host must grant** (per Google's Shared VPC GKE setup). With
+`207144179797` as the gke-apps project number:
+
+| Principal | Role | Scope | Why |
+|---|---|---|---|
+| `service-207144179797@container-engine-robot.iam.gserviceaccount.com` (GKE service agent) | `compute.networkUser` | subnet `gke-usw1` | Place nodes and pods in the shared subnet |
+| same | `container.hostServiceAgentUser` | net-host project | Manage the network resources GKE owns in the host |
+| same | `compute.securityAdmin` | net-host project | Let GKE create and maintain its own firewall rules (control plane → nodes for webhooks, health checks, intra-cluster) |
+| `207144179797@cloudservices.gserviceaccount.com` (Google APIs service agent) | `compute.networkUser` | subnet `gke-usw1` | Managed instance groups for node pools |
+| `sa-tf-apps` | `compute.networkUser` | subnet `gke-usw1` | Stage 3 creates the cluster against this subnet |
+
+**Firewall choice:** GKE on a Shared VPC can't create firewall rules in the host unless you let it.
+The alternative is to hand-maintain rules for control-plane webhook ports (Chaos Mesh, cert-manager
+style admission webhooks), health checks and pod ranges, and to find out which one is missing only
+when something silently fails. Granting the GKE service agent `compute.securityAdmin` on the host is
+Google's documented option and the right trade for one cluster in a nonprod host. A custom role
+limited to firewall permissions is the tighter version. It needs `iam.roleAdmin`, which no stage SA
+holds, so it's deferred.
+
+`sa-tf-net` can make all of these grants: `resourcemanager.projectIamAdmin` on net-host (from stage
+1) for the project-level ones, and `compute.xpnAdmin` for the subnet-level `networkUser` bindings.
+
+**Outputs:** network and subnet self-links, secondary range names, region, and the reserved
+control-plane CIDR. Stage 3 reads these instead of creating its own VPC.
+
+### Not in this stage
+- **Network hub / NCC / Interconnect / DNS:** deferred with the rest of the full landing zone.
+- **Hand-written firewall rules:** none. The VPC's implied deny-ingress stays, and GKE manages its
+  own rules. No SSH rule: OS Login is enforced and nothing here needs a shell.
+- **VPC Service Controls:** deferred.
+- **Refactoring `terraform/gcp/` into `3-apps`:** the next stage. Until then that root still builds
+  its own VPC if applied, so don't run `make up CLOUD=gcp` against the new projects yet.
+
+### Risks
+- **GKE service agent may not exist yet.** It is created when the Container API is enabled, which
+  stage 1 did, but granting IAM to it can fail with "does not exist" if it hasn't propagated.
+  `google_project_service_identity` would force it but needs the beta provider; re-running apply
+  after a minute is simpler.
+- **Domain-restricted sharing** (`iam.allowedPolicyMemberDomains`): Google service agents are
+  granted fine under it (the logging sink's writer identity was, in stage 1).
+- **Cost:** everything in this stage is free while idle. NAT charges start and stop with the
+  cluster in stage 3.
