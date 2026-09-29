@@ -99,18 +99,10 @@ resource "google_folder_iam_member" "operators" {
   member = each.value.member
 }
 
-# Read the central audit trail: the Log Router and every project's audit logs
-# (logging.viewer, org-wide) and the org-audit bucket's views in shared-ops,
-# which Observability Analytics queries (viewAccessor; logging.viewer alone
-# covers only the built-in _Default and _Required buckets). Read-only.
-resource "google_organization_iam_member" "operators_log_viewer" {
-  for_each = toset(var.operators)
-
-  org_id = var.org_id
-  role   = "roles/logging.viewer"
-  member = each.value
-}
-
+# Query the org-audit bucket in Observability Analytics. logging.viewer alone
+# covers only the built-in _Default and _Required buckets. Read-only. The
+# org-wide logging.viewer that goes with it is granted in 0-bootstrap:
+# sa-tf-org can't edit org IAM, and shouldn't be able to.
 resource "google_project_iam_member" "operators_audit_access" {
   for_each = toset(var.operators)
 
