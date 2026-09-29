@@ -98,3 +98,23 @@ resource "google_folder_iam_member" "operators" {
   role   = each.value.role
   member = each.value.member
 }
+
+# Read the central audit trail: the Log Router and every project's audit logs
+# (logging.viewer, org-wide) and the org-audit bucket's views in shared-ops,
+# which Observability Analytics queries (viewAccessor; logging.viewer alone
+# covers only the built-in _Default and _Required buckets). Read-only.
+resource "google_organization_iam_member" "operators_log_viewer" {
+  for_each = toset(var.operators)
+
+  org_id = var.org_id
+  role   = "roles/logging.viewer"
+  member = each.value
+}
+
+resource "google_project_iam_member" "operators_audit_access" {
+  for_each = toset(var.operators)
+
+  project = google_project.this["shared-ops"].project_id
+  role    = "roles/logging.viewAccessor"
+  member  = each.value
+}
