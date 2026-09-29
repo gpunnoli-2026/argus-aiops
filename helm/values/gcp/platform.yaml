@@ -1,12 +1,16 @@
 # Static facts about GKE. Per-deployment facts (bucket URI) arrive from
-# `terraform -chdir=terraform/gcp output -json helm_values`.
+# `terraform -chdir=terraform/gcp/3-apps output -json helm_values`.
 #
 # No serviceAccountAnnotations and no extraEnv: Workload Identity binds the
 # mlflow/mlflow KSA directly in IAM, and credentials + project come from the
 # node metadata server.
 mlflow:
   storageClassName: standard-rwo # GKE PD CSI, pd-balanced
-  extraPipPackages: google-cloud-storage
+  # Unpinned, google-cloud-storage pulls protobuf 7, which MLflow 2.20 can't
+  # serialize errors with: every 404 (e.g. a model alias before the first
+  # training run) became a 500 with "FieldDescriptor has no attribute label".
+  # Quoted: this string is pasted into a bash `pip install` line.
+  extraPipPackages: google-cloud-storage 'protobuf<6'
 
 capacityForecaster:
   # COS mounts "/" as a small read-only image partition that always reads

@@ -64,3 +64,13 @@ resource "google_service_account_iam_member" "admin_impersonation" {
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = var.admin_principal
 }
+
+# Org-level grants live here, applied as gk@ (Organization Administrator):
+# sa-tf-org can't edit org IAM, and shouldn't be able to, since that would let
+# it grant itself anything. Read-only: the Log Router and every project's audit
+# logs. 1-org adds viewAccessor on the org-audit bucket in shared-ops.
+resource "google_organization_iam_member" "admin_log_viewer" {
+  org_id = var.org_id
+  role   = "roles/logging.viewer"
+  member = var.admin_principal
+}
