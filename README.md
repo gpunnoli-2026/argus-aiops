@@ -22,7 +22,7 @@ designed and next to build (see status below).
 | 3 | Capacity forecasting (Prophet) & alert correlation | ✅ Done |
 | 4 | Slack incident workflow + gated remediation | 📋 Next |
 | 5 | MLOps hardening | 🔶 Partial — gated promotion, rollback, nightly retraining, CI done; drift gates (Evidently) + chaos-window eval planned |
-| 6 | Multi-cloud portability & polish | 🔶 Partial — GKE port built (Terraform, Workload Identity, per-cloud Helm overlays); pending a live parity run on GCP |
+| 6 | Multi-cloud portability & polish | 🔶 Partial — **ported to GCP**: full platform deployed and running on GKE inside a Terraform-built landing zone; measured parity run (the EKS results below, repeated on GKE) next |
 
 ### Measured results (live chaos runs on EKS)
 
@@ -34,6 +34,25 @@ designed and next to build (see status below).
 - **Alert correlation:** 7 raw alerts folded into **1 incident** (~86% noise reduction),
   correctly capturing a noisy-neighbor effect (CPU stress on one service pushed
   co-located services into anomaly), with topology-based root-cause inference
+
+### Running on GCP
+
+The same Helm charts, services and `make up | deploy | down` workflow run on GKE; only the
+cloud edge differs. GCP gets a small landing zone modelled on Google's
+`terraform-example-foundation`, built in four Terraform stages, each running as its own
+service account:
+
+| Stage | Builds |
+|---|---|
+| `0-bootstrap` | Remote state bucket, per-stage service accounts, keyless GitHub Actions (Workload Identity Federation) |
+| `1-org` | Environment folders, projects, org policies (no SA keys, no external VM IPs, US-only), central audit-log sink, budget |
+| `2-networks` | Shared VPC host with the GKE subnet; the workload project attaches as a service project |
+| `3-apps` | GKE Standard cluster (private Spot nodes, Dataplane V2, Workload Identity), MLflow bucket, Cloud NAT. The only stage `make up/down` touches |
+
+Verified on GKE: all platform workloads running, including Chaos Mesh's privileged
+`chaos-daemon` under the org guardrails; MLflow serving artifacts from GCS through
+Workload Identity with no keys; audit logs from every project landing in one central
+bucket. Design and decisions: [docs/gcp-port-design.md](docs/gcp-port-design.md).
 
 ## Architecture
 
@@ -91,7 +110,7 @@ The demo app is deployed without its public load balancer (k6 drives it in-clust
 ## Repository layout
 
 ```
-terraform/       Infrastructure as code (aws/ = EKS+S3, gcp/ = GKE+GCS; azure/ later)
+terraform/       Infrastructure as code (aws/ = EKS+S3; gcp/ = landing-zone stages 0-bootstrap … 3-apps, GKE+GCS; azure/ later)
 helm/            Platform umbrella chart + per-cloud values overlays (aws/ gcp/ kind/)
 services/        FastAPI microservices (detection, forecasting, correlation; Phase 4 adds orchestration + remediation)
 src/             LLM diagnostic layer — RAG-grounded incident narrative + ticket drafting
