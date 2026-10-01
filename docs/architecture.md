@@ -227,6 +227,8 @@ The full design, decision log and known GKE gotchas: [gcp-port-design.md](gcp-po
 ### retraining pipeline (K8s CronJob, nightly) — ✅ implemented (anomaly model)
 ```
 pull 6h feature window (Prometheus recording rules)
+  → drop samples within 15 min of a pod start (WARMUP_MINUTES):
+    warm-up outliers otherwise set the top of the score scale
   → train per-service IsolationForest bundle + global fallback
   → promotion gate:
       background alarm rate on the training window ≤ 5%
