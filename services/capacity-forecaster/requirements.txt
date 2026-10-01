@@ -1,4 +1,7 @@
 prophet==1.1.6
+# cmdstanpy 1.3 rejects Prophet 1.1.6's bundled CmdStan (no makefile), so every
+# fit fails with "'Prophet' object has no attribute 'stan_backend'".
+cmdstanpy==1.2.5
 pandas==2.2.3
 requests==2.32.3
 fastapi==0.115.8
