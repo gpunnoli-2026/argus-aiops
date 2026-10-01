@@ -8,7 +8,8 @@ grafana:
     passwordKey: admin-password
   resources:
     requests: { cpu: 50m, memory: 128Mi }
-    limits: { memory: 256Mi }
+    # 256Mi was OOMKilled the moment dashboards were opened (GKE parity run)
+    limits: { memory: 512Mi }
 
 prometheus:
   prometheusSpec:

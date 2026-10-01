@@ -119,6 +119,13 @@ def _loop():
                     except Exception:
                         errors += 1
                         log.exception("fit failed for %s/%s", resource, inst)
+                        # Drop the series rather than keep its last value: a
+                        # stale 999 reads as "no exhaustion coming" while
+                        # nothing is being forecast at all.
+                        try:
+                            HOURS.remove(resource, inst)
+                        except KeyError:
+                            pass
                         continue
                     value = NO_CROSSING if h is None else round(h, 2)
                     HOURS.labels(resource=resource, instance=inst).set(value)
