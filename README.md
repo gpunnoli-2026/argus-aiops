@@ -123,4 +123,5 @@ docs/            Architecture, build plan, runbooks, design decisions
 
 ## License
 
-[Apache-2.0](LICENSE)
+Copyright 2026 Gopakumar Punnoli. Licensed under [Apache-2.0](LICENSE); redistributions
+must keep the attribution in [NOTICE](NOTICE).
