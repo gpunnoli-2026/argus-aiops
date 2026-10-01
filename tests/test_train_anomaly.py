@@ -58,6 +58,55 @@ def test_alarm_rate_low_on_training_window(fitted):
     assert mod.alarm_rate(bundle, normal) <= mod.GATE_MAX_ALARM_RATE
 
 
+def _window_with_warmup(minutes=128):
+    """One service shaped like cartservice on the GKE parity run: memory climbs
+    for the first minutes after the pod starts, then traffic is steady."""
+    rng = np.random.default_rng(7)
+    mem = np.linspace(52, 61, minutes) + rng.normal(0, 0.3, minutes)
+    mem[:8] = [37.6, 40.5, 42.8, 46.3, 48.1, 50.6, 51.4, 51.4]
+    ts = 1_000_000.0 + 60 * np.arange(minutes)
+    df = pd.DataFrame(
+        {
+            "ts": ts,
+            "service": "cartservice",
+            "cpu_rate": rng.normal(0.025, 0.002, minutes),
+            "mem_ws_bytes": mem * 2**20,
+            "restarts_delta": 0.0,
+            "pods_not_ready": 0.0,
+        }
+    )
+    starts = pd.DataFrame({"ts": ts, "service": "cartservice", "pod_start": ts[0] - 60})
+    return df, starts
+
+
+def test_drop_warmup_removes_minutes_after_each_pod_start(train_module):
+    df, starts = _window_with_warmup()
+    restart = df["ts"].iloc[60]
+    starts.loc[starts["ts"] >= restart, "pod_start"] = restart  # pod replaced mid-window
+    other = df.assign(service="emailservice")  # no pod start known: kept whole
+    kept = train_module.drop_warmup(pd.concat([df, other], ignore_index=True), starts)
+
+    cart = kept[kept["service"] == "cartservice"]["ts"]
+    warmup = train_module.WARMUP_MINUTES * 60
+    assert cart.min() >= starts["pod_start"].iloc[0] + warmup
+    assert not cart.between(restart, restart + warmup, inclusive="left").any()
+    assert (kept["service"] == "emailservice").sum() == len(df)
+
+
+def test_cpu_only_fault_alerts_once_warmup_is_dropped(train_module):
+    df, starts = _window_with_warmup()
+    train = train_module.drop_warmup(df, starts)
+    pipe, lo, hi = train_module.fit_pipeline(train[train_module.FEATURES])
+    bundle = train_module.AnomalyBundle({"__global__": pipe}, {"__global__": (lo, hi)})
+    # CPU pinned at its limit, nothing else wrong — what make chaos-cpu produces
+    fault = pd.DataFrame(
+        [{"service": "cartservice", "cpu_rate": 0.300, "mem_ws_bytes": 65 * 2**20,
+          "restarts_delta": 0.0, "pods_not_ready": 0.0}]
+    )
+    assert bundle.predict(None, fault)[0] > train_module.ALERT_THRESHOLD
+    assert train_module.alarm_rate(bundle, train) <= train_module.GATE_MAX_ALARM_RATE
+
+
 def test_gate_passes_quiet_model_without_production_baseline(fitted, monkeypatch):
     mod, bundle, normal = fitted
     monkeypatch.setattr(

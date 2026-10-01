@@ -39,14 +39,23 @@ ALERT_THRESHOLD = 0.8  # must match ServiceAnomalyDetected in observability/rule
 GATE_MAX_ALARM_RATE = float(os.environ.get("GATE_MAX_ALARM_RATE", "0.05"))
 GATE_REGRESSION_MARGIN = float(os.environ.get("GATE_REGRESSION_MARGIN", "0.02"))
 
+WARMUP_MINUTES = float(os.environ.get("WARMUP_MINUTES", "15"))
+
 FEATURES = ["cpu_rate", "mem_ws_bytes", "restarts_delta", "pods_not_ready"]
 
+# Newest pod start per service, keyed like the aiops:svc:* rules. Not a feature,
+# so it is queried raw rather than given a recording rule of its own.
+POD_START_QUERY = (
+    'max by (pod_owner) (label_replace(kube_pod_start_time{namespace="boutique"}, '
+    '"pod_owner", "$1", "pod", "^(.*)-[a-z0-9]+-[a-z0-9]+$"))'
+)
 
-def prom_range(metric: str, start: float, end: float) -> pd.DataFrame:
-    """Range query one recording rule -> long df [ts, service, value]."""
+
+def prom_range(metric: str, start: float, end: float, query: str | None = None) -> pd.DataFrame:
+    """Range query one recording rule (or a raw `query`) -> long df [ts, service, value]."""
     r = requests.get(
         f"{PROM_URL}/api/v1/query_range",
-        params={"query": f"aiops:svc:{metric}", "start": start, "end": end, "step": STEP_SECONDS},
+        params={"query": query or f"aiops:svc:{metric}", "start": start, "end": end, "step": STEP_SECONDS},
         timeout=60,
     )
     r.raise_for_status()
@@ -68,8 +77,28 @@ def build_matrix() -> pd.DataFrame:
             part = pd.DataFrame(columns=["ts", "service", m])
         df = part if df is None else df.merge(part, on=["ts", "service"], how="outer")
     df = df.fillna(0.0)
-    log.info("training matrix: %d rows, %d services", len(df), df["service"].nunique())
+    rows = len(df)
+    df = drop_warmup(df, prom_range("pod_start", start, end, query=POD_START_QUERY))
+    log.info(
+        "training matrix: %d rows, %d services (%d warm-up rows dropped)",
+        len(df), df["service"].nunique(), rows - len(df),
+    )
     return df
+
+
+def drop_warmup(df: pd.DataFrame, starts: pd.DataFrame) -> pd.DataFrame:
+    """Drop samples taken within WARMUP_MINUTES of a pod start in that service.
+
+    A pod's first minutes (memory still climbing) are the most isolated points
+    in a short window. They set the calibration floor, and a real CPU fault
+    then topped out at 0.66 — under the alert threshold (GKE parity run).
+    Samples with no known pod start are kept.
+    """
+    if df.empty or starts.empty or WARMUP_MINUTES <= 0:
+        return df
+    age = df.merge(starts, on=["ts", "service"], how="left")
+    age = age["ts"] - age["pod_start"]
+    return df[~(age < WARMUP_MINUTES * 60).to_numpy()].reset_index(drop=True)
 
 
 def fit_pipeline(x: pd.DataFrame) -> tuple[Pipeline, float, float]:
@@ -172,6 +201,7 @@ def main() -> None:
                 "step_seconds": STEP_SECONDS,
                 "features": ",".join(FEATURES),
                 "contamination": 0.02,
+                "warmup_minutes": WARMUP_MINUTES,
                 "gate_max_alarm_rate": GATE_MAX_ALARM_RATE,
             }
         )
