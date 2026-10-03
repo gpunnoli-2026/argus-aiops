@@ -29,6 +29,10 @@ HORIZON_HOURS = float(os.environ.get("HORIZON_HOURS", "12"))
 THRESHOLD = float(os.environ.get("THRESHOLD", "0.8"))
 STEP = 300  # 5m resolution
 NO_CROSSING = 999.0
+# A series with no sample this recent belongs to a node that is gone (scaled
+# down or Spot-preempted). It stays in the range result for HISTORY_HOURS, but
+# there is nothing left to forecast.
+STALE_SECONDS = 2 * STEP
 
 # Which filesystem the disk forecast tracks. "/" is the writable root on EKS
 # nodes and kind, but GKE's COS image mounts "/" read-only from a small verity
@@ -61,7 +65,15 @@ FIT_ERRORS = Gauge("aiops_forecaster_fit_errors", "Series that failed to fit in 
 app = FastAPI(title="argus-capacity-forecaster")
 app.mount("/metrics", make_asgi_app())
 
-_state: dict = {"forecasts": {}}
+_state: dict = {"forecasts": {}, "published": set()}
+
+
+def retire(keys: set[tuple[str, str]]) -> None:
+    for resource, inst in keys:
+        try:
+            HOURS.remove(resource, inst)
+        except KeyError:
+            pass
 
 
 def prom_range(query: str) -> dict[str, pd.DataFrame]:
@@ -72,8 +84,15 @@ def prom_range(query: str) -> dict[str, pd.DataFrame]:
         timeout=60,
     )
     r.raise_for_status()
+    return parse_series(r.json()["data"]["result"], end)
+
+
+def parse_series(result: list[dict], now: float) -> dict[str, pd.DataFrame]:
+    """Range-query result -> {instance: df[ds, y]}, skipping nodes that are gone."""
     out = {}
-    for series in r.json()["data"]["result"]:
+    for series in result:
+        if now - float(series["values"][-1][0]) > STALE_SECONDS:
+            continue
         inst = series["metric"].get("instance", "unknown")
         df = pd.DataFrame(series["values"], columns=["ds", "y"])
         df["ds"] = pd.to_datetime(df["ds"].astype(float), unit="s")
@@ -90,8 +109,11 @@ def hours_to_threshold(df: pd.DataFrame) -> float | None:
         return None
     if df["y"].iloc[-1] >= THRESHOLD:
         return 0.0
+    # "auto" fits a daily cycle only once there are 2+ days of history. Forced
+    # on, it fit a 24h wave to a few hours of data and forecast a flat 25%
+    # series crossing 80% within hours (false CapacityExhaustionImminent on GKE).
     m = Prophet(
-        daily_seasonality=True,
+        daily_seasonality="auto",
         weekly_seasonality=False,
         yearly_seasonality=False,
         changepoint_prior_scale=0.1,
@@ -111,7 +133,7 @@ def _loop():
     while True:
         errors = 0
         try:
-            snapshot = {}
+            snapshot, live = {}, set()
             for resource, query in QUERIES.items():
                 for inst, df in prom_range(query).items():
                     try:
@@ -119,20 +141,19 @@ def _loop():
                     except Exception:
                         errors += 1
                         log.exception("fit failed for %s/%s", resource, inst)
-                        # Drop the series rather than keep its last value: a
-                        # stale 999 reads as "no exhaustion coming" while
-                        # nothing is being forecast at all.
-                        try:
-                            HOURS.remove(resource, inst)
-                        except KeyError:
-                            pass
                         continue
                     value = NO_CROSSING if h is None else round(h, 2)
                     HOURS.labels(resource=resource, instance=inst).set(value)
+                    live.add((resource, inst))
                     snapshot[f"{resource}/{inst}"] = {
                         "hours_to_threshold": value,
                         "current": round(float(df["y"].iloc[-1]), 4),
                     }
+            # Drop every series not forecast this loop — failed fits and gone
+            # nodes alike — rather than keep its last value: a stale number
+            # keeps alerts firing (or silent) about something nobody measures.
+            retire(_state["published"] - live)
+            _state["published"] = live
             _state["forecasts"] = snapshot
             LAST_RUN.set(time.time())
             log.info("forecast loop done: %d series, %d errors", len(snapshot), errors)

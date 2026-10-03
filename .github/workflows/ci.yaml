@@ -43,6 +43,7 @@ jobs:
         run: |
           pip install -r services/anomaly-detector/requirements.txt \
                       -r services/alert-correlator/requirements.txt \
+                      -r services/capacity-forecaster/requirements.txt \
                       pytest
 
       - name: Run unit tests
