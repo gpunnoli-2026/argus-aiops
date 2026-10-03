@@ -3,6 +3,11 @@ import pandas as pd
 import pytest
 
 
+def _bundle(mod, train):
+    env = mod.fit_envelope(train[mod.FEATURES])
+    return mod.AnomalyBundle({"cartservice": env, "__global__": env})
+
+
 @pytest.fixture(scope="module")
 def fitted(train_module):
     rng = np.random.default_rng(42)
@@ -16,13 +21,7 @@ def fitted(train_module):
             "pods_not_ready": 0.0,
         }
     )
-    models, calib = {}, {}
-    models["cartservice"], lo, hi = train_module.fit_pipeline(normal[train_module.FEATURES])
-    calib["cartservice"] = (lo, hi)
-    models["__global__"], lo, hi = train_module.fit_pipeline(normal[train_module.FEATURES])
-    calib["__global__"] = (lo, hi)
-    bundle = train_module.AnomalyBundle(models, calib)
-    return train_module, bundle, normal
+    return train_module, _bundle(train_module, normal), normal
 
 
 def _extreme_row(service="cartservice"):
@@ -34,7 +33,7 @@ def _extreme_row(service="cartservice"):
 
 def test_scores_bounded_zero_one(fitted):
     _, bundle, normal = fitted
-    scores = bundle.predict(None, normal)
+    scores = bundle.predict(None, pd.concat([normal, _extreme_row()], ignore_index=True))
     assert scores.min() >= 0.0 and scores.max() <= 1.0
 
 
@@ -93,18 +92,60 @@ def test_drop_warmup_removes_minutes_after_each_pod_start(train_module):
     assert (kept["service"] == "emailservice").sum() == len(df)
 
 
-def test_cpu_only_fault_alerts_once_warmup_is_dropped(train_module):
+@pytest.fixture(scope="module")
+def steady(train_module):
     df, starts = _window_with_warmup()
     train = train_module.drop_warmup(df, starts)
-    pipe, lo, hi = train_module.fit_pipeline(train[train_module.FEATURES])
-    bundle = train_module.AnomalyBundle({"__global__": pipe}, {"__global__": (lo, hi)})
-    # CPU pinned at its limit, nothing else wrong — what make chaos-cpu produces
-    fault = pd.DataFrame(
-        [{"service": "cartservice", "cpu_rate": 0.300, "mem_ws_bytes": 65 * 2**20,
-          "restarts_delta": 0.0, "pods_not_ready": 0.0}]
-    )
-    assert bundle.predict(None, fault)[0] > train_module.ALERT_THRESHOLD
-    assert train_module.alarm_rate(bundle, train) <= train_module.GATE_MAX_ALARM_RATE
+    return train_module, _bundle(train_module, train), train
+
+
+def _row(**features):
+    return pd.DataFrame([{"service": "cartservice", "restarts_delta": 0.0, "pods_not_ready": 0.0, **features}])
+
+
+def test_memory_creep_just_past_the_trained_range_does_not_alert(steady):
+    """Regression (GKE parity run): memory 0.3 MiB over the trained maximum
+    scored ~1.0 on the IsolationForest and raised alerts on healthy services."""
+    _, bundle, train = steady
+    creep = _row(cpu_rate=train["cpu_rate"].median(), mem_ws_bytes=train["mem_ws_bytes"].max() + 0.3 * 2**20)
+    assert bundle.predict(None, creep)[0] < 0.2
+
+
+def test_score_grows_with_distance_outside_the_range(steady):
+    """What the forest could not do: tell slightly outside from far outside."""
+    _, bundle, train = steady
+    mem = train["mem_ws_bytes"].median()
+    scores = [bundle.predict(None, _row(cpu_rate=c, mem_ws_bytes=mem))[0] for c in (0.030, 0.045, 0.060, 0.300)]
+    assert scores == sorted(scores) and scores[0] < 0.2 < scores[-1]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        {"cpu_rate": 0.300},  # CPU pinned at its limit, nothing else wrong: make chaos-cpu
+        {"restarts_delta": 1.0},  # one restart, e.g. an OOM kill
+        {"pods_not_ready": 1.0},
+    ],
+)
+def test_single_feature_faults_alert(steady, fault):
+    mod, bundle, train = steady
+    row = {"cpu_rate": train["cpu_rate"].median(), "mem_ws_bytes": train["mem_ws_bytes"].median(), **fault}
+    assert bundle.predict(None, _row(**row))[0] > mod.ALERT_THRESHOLD
+    assert mod.alarm_rate(bundle, train) <= mod.GATE_MAX_ALARM_RATE
+
+
+def test_quieter_traffic_inside_the_trained_range_scores_zero(fitted):
+    _, bundle, normal = fitted
+    quiet = _row(cpu_rate=normal["cpu_rate"].quantile(0.05), mem_ws_bytes=normal["mem_ws_bytes"].median())
+    assert bundle.predict(None, quiet)[0] == 0.0
+
+
+def test_nightly_refresh_skips_when_there_is_no_production_model(train_module, monkeypatch):
+    """The CronJob must not promote the first model on a new cluster."""
+    monkeypatch.setattr(train_module, "REQUIRE_PRODUCTION_BASELINE", True)
+    monkeypatch.setattr(train_module, "has_production_model", lambda: False)
+    monkeypatch.setattr(train_module, "build_matrix", lambda: pytest.fail("trained without a baseline"))
+    train_module.main()
 
 
 def test_gate_passes_quiet_model_without_production_baseline(fitted, monkeypatch):

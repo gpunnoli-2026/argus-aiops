@@ -1,7 +1,11 @@
 """Train per-service anomaly models on the aiops:svc:* Prometheus series.
 
-One IsolationForest pipeline per service (plus a global fallback), bundled
-into a single MLflow pyfunc model registered as `argus-anomaly`. Promotion to
+One range envelope per service (plus a global fallback), bundled into a single
+MLflow pyfunc model registered as `argus-anomaly`: the trained range of each
+feature and a tolerance, scored by how far outside that range a sample sits.
+It replaced an IsolationForest, which scored memory 0.3 MiB past its training
+range the same as CPU at seven times it — ml/evaluation/compare_models.py
+reruns that comparison on a recorded cluster run. Promotion to
 the `production` alias is gated: the new bundle's background alarm rate on the
 training window must stay under GATE_MAX_ALARM_RATE and must not regress
 against the current production model. Scores are calibrated to [0, 1] where
@@ -23,9 +27,6 @@ import mlflow
 import numpy as np
 import pandas as pd
 import requests
-from sklearn.ensemble import IsolationForest
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("train")
@@ -38,10 +39,25 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "argus-anomaly")
 ALERT_THRESHOLD = 0.8  # must match ServiceAnomalyDetected in observability/rules
 GATE_MAX_ALARM_RATE = float(os.environ.get("GATE_MAX_ALARM_RATE", "0.05"))
 GATE_REGRESSION_MARGIN = float(os.environ.get("GATE_REGRESSION_MARGIN", "0.02"))
+REQUIRE_PRODUCTION_BASELINE = os.environ.get("REQUIRE_PRODUCTION_BASELINE", "").lower() == "true"
 
 WARMUP_MINUTES = float(os.environ.get("WARMUP_MINUTES", "15"))
 
 FEATURES = ["cpu_rate", "mem_ws_bytes", "restarts_delta", "pods_not_ready"]
+
+# Range envelope (see fit_envelope). A feature's tolerance is the largest of
+# RANGE_TOLERANCE x its trained range, RANGE_TOLERANCE x its median, and an
+# absolute floor for features that barely move. RANGE_ALERT_DISTANCE
+# tolerances outside the range is where the score reaches ALERT_THRESHOLD.
+RANGE_TOLERANCE = float(os.environ.get("RANGE_TOLERANCE", "0.25"))
+RANGE_ALERT_DISTANCE = float(os.environ.get("RANGE_ALERT_DISTANCE", "2.0"))
+RANGE_FLOOR = {
+    "cpu_rate": 0.010,  # 10 millicores
+    "mem_ws_bytes": 8 * 2**20,  # 8 MiB
+    # under 0.5, so one restart or one unready pod is already past the alert distance
+    "restarts_delta": 0.4,
+    "pods_not_ready": 0.4,
+}
 
 # Newest pod start per service, keyed like the aiops:svc:* rules. Not a feature,
 # so it is queried raw rather than given a recording rule of its own.
@@ -89,10 +105,9 @@ def build_matrix() -> pd.DataFrame:
 def drop_warmup(df: pd.DataFrame, starts: pd.DataFrame) -> pd.DataFrame:
     """Drop samples taken within WARMUP_MINUTES of a pod start in that service.
 
-    A pod's first minutes (memory still climbing) are the most isolated points
-    in a short window. They set the calibration floor, and a real CPU fault
-    then topped out at 0.66 — under the alert threshold (GKE parity run).
-    Samples with no known pod start are kept.
+    A pod's first minutes (memory still climbing) are not its steady state, and
+    would stretch the bottom of the trained memory range. Samples with no known
+    pod start are kept.
     """
     if df.empty or starts.empty or WARMUP_MINUTES <= 0:
         return df
@@ -101,38 +116,35 @@ def drop_warmup(df: pd.DataFrame, starts: pd.DataFrame) -> pd.DataFrame:
     return df[~(age < WARMUP_MINUTES * 60).to_numpy()].reset_index(drop=True)
 
 
-def fit_pipeline(x: pd.DataFrame) -> tuple[Pipeline, float, float]:
-    pipe = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            ("iforest", IsolationForest(n_estimators=100, contamination=0.02, random_state=42)),
-        ]
-    )
-    pipe.fit(x)
-    # calibration bounds: decision_function is high=normal; invert to 0-1 anomaly score
-    dec = pipe.decision_function(x)
-    return pipe, float(dec.min()), float(dec.max())
+def fit_envelope(x: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Trained range per feature (0.5th-99.5th percentile) and its tolerance."""
+    lo, hi = x.quantile(0.005).to_numpy(), x.quantile(0.995).to_numpy()
+    floor = np.array([RANGE_FLOOR[f] for f in x.columns])
+    tol = np.maximum.reduce([RANGE_TOLERANCE * (hi - lo), RANGE_TOLERANCE * np.abs(x.median().to_numpy()), floor])
+    return lo, hi, tol
 
 
 class AnomalyBundle(mlflow.pyfunc.PythonModel):
-    """Per-service pipelines + global fallback, calibrated to [0,1]."""
+    """Per-service range envelopes + global fallback, scored to [0,1].
 
-    def __init__(self, models: dict, calib: dict):
-        self.models = models  # service -> Pipeline ("__global__" = fallback)
-        self.calib = calib    # service -> (dec_min, dec_max)
+    0 inside the trained range; ALERT_THRESHOLD at RANGE_ALERT_DISTANCE
+    tolerances outside it on the worst feature; approaching 1 beyond that.
+    """
+
+    def __init__(self, envelope: dict):
+        self.envelope = envelope  # service -> (lo, hi, tol) ("__global__" = fallback)
 
     def _score(self, key: str, x: pd.DataFrame) -> np.ndarray:
-        pipe = self.models[key]
-        lo, hi = self.calib[key]
-        dec = pipe.decision_function(x)
-        rng = (hi - lo) or 1.0
-        return np.clip((hi - dec) / rng, 0.0, 1.0)
+        lo, hi, tol = self.envelope[key]
+        v = x.to_numpy(dtype=float)
+        dist = np.maximum((v - hi) / tol, (lo - v) / tol).max(axis=1).clip(min=0.0)
+        return 1.0 - (1.0 - ALERT_THRESHOLD) ** (dist / RANGE_ALERT_DISTANCE)
 
     def predict(self, context, model_input: pd.DataFrame, params=None) -> np.ndarray:
         out = np.zeros(len(model_input))
         x = model_input[FEATURES]
         for i, svc in enumerate(model_input["service"].tolist()):
-            key = svc if svc in self.models else "__global__"
+            key = svc if svc in self.envelope else "__global__"
             out[i] = self._score(key, x.iloc[[i]])[0]
         return out
 
@@ -174,24 +186,39 @@ def rollback() -> None:
     log.info("rolled back %s @production: v%s -> v%s", MODEL_NAME, current, previous)
 
 
+def has_production_model() -> bool:
+    try:
+        mlflow.MlflowClient().get_model_version_by_alias(MODEL_NAME, "production")
+        return True
+    except mlflow.exceptions.MlflowException as e:
+        log.warning("no %s@production: %s", MODEL_NAME, e)
+        return False
+
+
 def main() -> None:
+    # The nightly CronJob only refreshes an existing production model. With
+    # nothing to compare against the gate passes anything: on a new cluster it
+    # promoted a model trained on idle traffic 24 minutes before the first load
+    # test, which then raised 39 false incidents. The first model is a
+    # deliberate `make train`.
+    if REQUIRE_PRODUCTION_BASELINE and not has_production_model():
+        log.info("skipping: no production model to refresh yet — run `make train` once traffic has baked")
+        return
+
     df = build_matrix()
     if df.empty:
         raise SystemExit("No training data — is the load generator running?")
 
-    models, calib, per_service_samples = {}, {}, {}
+    envelope = {}
     for svc, grp in df.groupby("service"):
         if len(grp) < MIN_SAMPLES:
             log.info("skip %s: only %d samples", svc, len(grp))
             continue
-        models[svc], lo, hi = fit_pipeline(grp[FEATURES])
-        calib[svc] = (lo, hi)
-        per_service_samples[svc] = len(grp)
+        envelope[svc] = fit_envelope(grp[FEATURES])
 
-    models["__global__"], lo, hi = fit_pipeline(df[FEATURES])
-    calib["__global__"] = (lo, hi)
+    envelope["__global__"] = fit_envelope(df[FEATURES])
 
-    bundle = AnomalyBundle(models, calib)
+    bundle = AnomalyBundle(envelope)
     promote, gate_metrics = promotion_gate(bundle, df)
 
     with mlflow.start_run(run_name="anomaly-train") as run:
@@ -200,13 +227,14 @@ def main() -> None:
                 "train_hours": TRAIN_HOURS,
                 "step_seconds": STEP_SECONDS,
                 "features": ",".join(FEATURES),
-                "contamination": 0.02,
                 "warmup_minutes": WARMUP_MINUTES,
+                "range_tolerance": RANGE_TOLERANCE,
+                "range_alert_distance": RANGE_ALERT_DISTANCE,
                 "gate_max_alarm_rate": GATE_MAX_ALARM_RATE,
             }
         )
         mlflow.log_metrics(
-            {"rows": len(df), "services_modeled": len(models) - 1, **gate_metrics}
+            {"rows": len(df), "services_modeled": len(envelope) - 1, **gate_metrics}
         )
         info = mlflow.pyfunc.log_model(
             artifact_path="model",

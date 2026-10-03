@@ -33,6 +33,9 @@ spec:
                   value: http://mlflow.mlflow:5000
                 - name: TRAIN_HOURS
                   value: "6"
+                # Refresh only: never promote the first model on a new cluster.
+                - name: REQUIRE_PRODUCTION_BASELINE
+                  value: "true"
               volumeMounts:
                 - name: code
                   mountPath: /app
