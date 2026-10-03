@@ -334,7 +334,7 @@ until the networks and apps stages replace it; it becomes `3-apps`.
 | Stage SAs | `sa-tf-org`, `sa-tf-net`, `sa-tf-apps` | `roles/storage.objectUser` on the state bucket, each with its own state prefix |
 | Impersonation | — | `gk@gklabs.fyi` gets `roles/iam.serviceAccountTokenCreator` on each stage SA |
 | WIF pool / provider | `github-pool` / `github-oidc` | Issuer `token.actions.githubusercontent.com`; `attribute_condition` pins `assertion.repository_id` (not the name, which a rename could let someone reclaim) and `assertion.repository_owner_id` |
-| WIF bindings | — | `roles/iam.workloadIdentityUser` on each stage SA for `principalSet://…/attribute.repository_id/1298937726` (the repo's numeric ID) |
+| WIF bindings | — | `roles/iam.workloadIdentityUser` on each stage SA for `principalSet://…/attribute.repository_id/<repo-id>` (the repo's numeric ID, `var.github_repository_id`) |
 
 ### Least privilege: grant only what exists yet
 Bootstrap grants **org-level** roles to `sa-tf-org` only, because that is all that exists before
@@ -343,7 +343,7 @@ stage 1:
 - `roles/resourcemanager.folderAdmin`, `roles/resourcemanager.projectCreator`,
   `roles/orgpolicy.policyAdmin`, `roles/logging.configWriter` (org log sink),
   `roles/resourcemanager.organizationViewer` — on the organization
-- `roles/billing.user` — on billing account `0149B6-C91A10-9BA988`
+- `roles/billing.user` — on the billing account (`var.billing_account`)
 
 `sa-tf-net` and `sa-tf-apps` get **no** roles here. Stage `1-org` creates `shared/`, `nonprod/` and
 the three projects, and grants them their roles scoped to what it just made:
@@ -357,7 +357,7 @@ The cost of this rule is that `1-org` needs `resourcemanager.projectIamAdmin` on
 creates. It already has it, because the project creator is granted Owner.
 
 ### Inputs and outputs
-- **Variables:** `org_id` (`82940792361`), `billing_account`, `seed_project_id`, `region`, `prefix`,
+- **Variables:** `org_id`, `billing_account`, `seed_project_id`, `region`, `prefix`,
   `github_repository_id`, `github_owner_id`, `admin_principal`
   (`user:gk@gklabs.fyi`). Real values live in the gitignored `terraform.tfvars`; `example.tfvars`
   documents them.
@@ -411,7 +411,7 @@ both set `impersonate_service_account = sa-tf-org@…`. Bootstrap outputs (SA em
 
 **Folders** (under `gklabs.fyi`): `shared`, `nonprod`.
 
-**Projects** (all linked to billing `0149B6-C91A10-9BA988`, `auto_create_network = false`,
+**Projects** (all linked to the billing account in `var.billing_account`, `auto_create_network = false`,
 label `environment`):
 
 | Project | Folder | APIs enabled here |
