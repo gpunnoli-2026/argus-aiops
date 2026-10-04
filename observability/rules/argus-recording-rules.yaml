@@ -57,3 +57,20 @@ spec:
             source: argus-static
           annotations:
             summary: "{{ $labels.pod_owner }} has pods not ready for 5m"
+        # A leak that grows during the training window is learned as normal, so
+        # no anomaly model flags it; the limit is the fixed reference. On the
+        # GKE run currencyservice was OOMKilled and paymentservice sat at 97%.
+        - alert: BoutiqueMemoryNearLimit
+          expr: |
+            aiops:svc:mem_ws_bytes
+              / on (namespace, pod_owner)
+            sum by (namespace, pod_owner) (
+              label_replace(kube_pod_container_resource_limits{namespace="boutique", resource="memory"},
+                "pod_owner", "$1", "pod", "^(.*)-[a-z0-9]+-[a-z0-9]+$")
+            ) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+            source: argus-static
+          annotations:
+            summary: "{{ $labels.pod_owner }} is using {{ $value | humanizePercentage }} of its memory limit"

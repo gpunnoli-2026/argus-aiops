@@ -142,11 +142,18 @@ The full design, decision log and known GKE gotchas: [gcp-port-design.md](gcp-po
   definition shared by training and serving (no train/serve skew).
   *Planned:* p50/p95/p99 latency, request_rate, error_rate — the current feature set is
   resource-level only and cannot directly see latency/error faults.
-- **Model:** IsolationForest per service (`n_estimators=100`, `contamination=0.02`)
-  behind a StandardScaler, plus a `__global__` fallback for services with too few
-  samples or unseen at serve time. Scores calibrated to [0,1] by inverting and
-  min-max scaling the decision function over the training window.
-  *Considered, not built:* a rolling z-score ensemble alongside the forest.
+- **Model:** a range envelope per service, plus a `__global__` fallback for services
+  with too few samples or unseen at serve time. Training records each feature's range
+  (0.5th–99.5th percentile) and a tolerance (the largest of 25% of that range, 25% of
+  the median, and an absolute floor). The score is 0 inside the range, reaches the 0.8
+  alert threshold two tolerances outside it on the worst feature, and approaches 1
+  beyond that.
+  *Replaced:* an IsolationForest per service. Its score stops rising outside the
+  training range, so memory 0.3 MiB past the trained maximum scored like CPU at seven
+  times it — five healthy services alerted within minutes of training on GKE.
+  `ml/evaluation/compare_models.py` reruns the comparison on a recorded run.
+  *Candidate follow-up:* scoring against each feature's rolling median (cleanest in
+  that comparison, but it stops alerting once a fault outlasts half its window).
 - **Seasonality handling (v2):** data-centric — the model is trained on multi-regime
   traffic (idle/ramp/steady/spike k6 profile) so load variation is inside the learned
   normal envelope. No time-of-day features; regime-agnostic, not regime-aware.
@@ -229,7 +236,7 @@ The full design, decision log and known GKE gotchas: [gcp-port-design.md](gcp-po
 pull 6h feature window (Prometheus recording rules)
   → drop samples within 15 min of a pod start (WARMUP_MINUTES):
     warm-up outliers otherwise set the top of the score scale
-  → train per-service IsolationForest bundle + global fallback
+  → fit per-service range envelopes + global fallback
   → promotion gate:
       background alarm rate on the training window ≤ 5%
       AND not > 2% noisier than the current @production model
@@ -238,6 +245,8 @@ pull 6h feature window (Prometheus recording rules)
           hot-reload within 5m)
      fail: register version, keep old alias, exit non-zero
            (CronJob shows failed — a bad night cannot demote quality)
+The CronJob only refreshes: with no @production model yet it skips, so
+the first model on a new cluster is a deliberate `make train`.
 Rollback: --rollback / make rollback flips @production to the
 previous registered version. No redeploy in either direction.
 ```
