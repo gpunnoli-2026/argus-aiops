@@ -3,8 +3,9 @@
 **AIOps Incident Prediction & Automated Response Platform**
 
 Argus is an end-to-end AIOps platform that ingests infrastructure telemetry from a
-Kubernetes microservices application, applies ML to detect anomalies, forecast capacity
-exhaustion, and correlate alert storms into classified incidents. The closing step —
+Kubernetes microservices application, learns each service's normal behaviour to detect
+anomalies, forecasts capacity exhaustion, and correlates alert storms into classified
+incidents. It runs on AWS (EKS) and Google Cloud (GKE) from one codebase. The closing step —
 human-in-the-loop, approval-gated auto-remediation delivered through Slack — is Phase 4,
 designed and next to build (see status below).
 
@@ -18,22 +19,50 @@ designed and next to build (see status below).
 |---|---|---|
 | 0 | Architecture, repo scaffold, Terraform/EKS foundation | ✅ Done |
 | 1 | Telemetry & failure lab (Prometheus, Chaos Mesh, k6) | ✅ Done |
-| 2 | Anomaly detection (IsolationForest + MLflow) | ✅ Done |
+| 2 | Anomaly detection (learned per-service baselines + MLflow) | ✅ Done |
 | 3 | Capacity forecasting (Prophet) & alert correlation | ✅ Done |
 | 4 | Slack incident workflow + gated remediation | 📋 Next |
-| 5 | MLOps hardening | 🔶 Partial — gated promotion, rollback, nightly retraining, CI done; drift gates (Evidently) + chaos-window eval planned |
-| 6 | Multi-cloud portability & polish | 🔶 Partial — **ported to GCP**: full platform deployed and running on GKE inside a Terraform-built landing zone; measured parity run (the EKS results below, repeated on GKE) next |
+| 5 | MLOps hardening | 🔶 Partial — gated promotion, rollback, nightly retraining, CI, offline model evaluation on recorded chaos runs done; drift gates (Evidently) planned |
+| 6 | Multi-cloud portability & polish | 🔶 Partial — **ported to GCP**: full platform running on GKE inside a Terraform-built landing zone, verified by a measured chaos run (results below); EKS re-measurement with the current model and polish remaining |
 
-### Measured results (live chaos runs on EKS)
+### Measured results (live chaos runs)
 
-- **Detection latency:** injected CPU fault → ML anomaly score > 0.8 in **under 2 minutes**
-- **Model iteration:** v1 (single-regime baseline) false-alerted under normal traffic;
-  v2 (multi-regime baseline: idle/ramp/steady/spike) cut background score noise **~60%**,
-  zero false alerts in a clean window, while still detecting real faults decisively —
-  promoted live via MLflow registry alias flip, no redeploy
-- **Alert correlation:** 7 raw alerts folded into **1 incident** (~86% noise reduction),
-  correctly capturing a noisy-neighbor effect (CPU stress on one service pushed
-  co-located services into anomaly), with topology-based root-cause inference
+**GKE, current model (range envelope), 4-hour session**
+
+- **Detection latency:** injected CPU fault → anomaly score > 0.8 in **73 seconds**. The
+  score rises with the size of the deviation (0.56 → 0.83 → 0.96 → 1.00 as CPU climbed).
+- **False alerts:** **zero** ML alerts in the clean window before the fault, and zero for
+  the whole session apart from the fault itself.
+- **Root cause:** one incident, correctly attributed to the faulted service, resolved
+  automatically once the fault ended.
+- **Leak warning:** a demo service leaking memory was flagged at 92% of its limit, before
+  it was OOM-killed; the anomaly model flagged a second leaking service at 80%.
+
+**How the model got here**
+
+- *EKS, IsolationForest:* v1 (single-regime baseline) false-alerted under normal traffic;
+  v2 (multi-regime baseline: idle/ramp/steady/spike) cut background score noise ~60% and
+  detected an injected CPU fault in under 2 minutes. 7 raw alerts folded into 1 incident
+  (~86% noise reduction), capturing a noisy-neighbor effect with topology-based
+  root-cause inference.
+- *GKE, IsolationForest:* the same model did not hold up. On one run a real fault scored
+  0.66 and never alerted; on the next, five healthy services alerted within minutes of
+  training. Cause: the forest's score stops rising outside its training range, so memory
+  0.3 MiB past the trained maximum scored like CPU at seven times it.
+- *Replacement:* four models were compared on the recorded run
+  ([ml/evaluation/compare_models.py](ml/evaluation/compare_models.py)) — the forest, a
+  range envelope, robust Mahalanobis distance and a rolling-median residual. The range
+  envelope was chosen: no false alerts on normal traffic, the fault detected in 75 s, and
+  it keeps alerting for as long as a fault lasts. The live run above confirmed it.
+
+**Known limits**
+
+- The EKS figures were measured with the IsolationForest and have not been re-measured
+  with the current model.
+- On the GKE run only the faulted service alerted, so the 7-into-1 noise reduction seen
+  on EKS was not reproduced there.
+- The correlator groups alerts by time first: two unrelated problems that alert within
+  five minutes of each other land in one incident.
 
 ### Running on GCP
 
@@ -52,7 +81,7 @@ service account:
 Verified on GKE: all platform workloads running, including Chaos Mesh's privileged
 `chaos-daemon` under the org guardrails; MLflow serving artifacts from GCS through
 Workload Identity with no keys; audit logs from every project landing in one central
-bucket. Design and decisions: [docs/gcp-port-design.md](docs/gcp-port-design.md).
+bucket; fault injection, detection, alerting and correlation end to end (results above). Design and decisions: [docs/gcp-port-design.md](docs/gcp-port-design.md).
 
 ## Architecture
 
@@ -86,7 +115,8 @@ Anthropic Claude (RAG-grounded diagnostic narrative) · GitHub Actions ·
 ```bash
 make up CLOUD=aws       # provision VPC + EKS + S3 (~15 min) — CLOUD=gcp gives GKE + GCS on the landing zone's shared VPC (docs/gcp-port-design.md §12–16)
 make deploy CLOUD=aws   # observability stack, demo app, chaos tooling, Argus services
-make load               # baseline traffic (bake ≥2h before first training)
+make load-varied        # 2.5h of idle/ramp/steady/spike traffic — what the model learns "normal" from
+make load               # steady traffic for the rest of the session
 make train              # train anomaly models, register in MLflow (@production)
 make chaos-cpu          # inject a fault — watch detection, alerting, correlation
 make incidents          # correlated incidents with root-cause inference
@@ -114,7 +144,7 @@ terraform/       Infrastructure as code (aws/ = EKS+S3; gcp/ = landing-zone stag
 helm/            Platform umbrella chart + per-cloud values overlays (aws/ gcp/ kind/)
 services/        FastAPI microservices (detection, forecasting, correlation; Phase 4 adds orchestration + remediation)
 src/             LLM diagnostic layer — RAG-grounded incident narrative + ticket drafting
-ml/              Training pipelines, evaluation, drift checks
+ml/              Training pipeline, offline model evaluation on recorded runs
 chaos/           Chaos Mesh experiment library (labeled ground truth)
 loadgen/         k6 load profiles
 observability/   Dashboards, recording & alerting rules
