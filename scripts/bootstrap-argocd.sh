@@ -3,7 +3,8 @@
 # deploys everything scripts/deploy.sh does, from git. Idempotent.
 #
 # What stays here, outside Argo CD: Argo CD itself, the namespaces, the
-# generated Grafana secret, and handing Terraform's outputs to the root app.
+# generated Grafana secret, the Prometheus Operator CRDs, and handing
+# Terraform's outputs to the root app.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -61,6 +62,20 @@ helm upgrade --install argocd argo-cd \
   --namespace argocd \
   --values argocd/values.yaml \
   --wait --timeout 10m
+
+echo ">>> Prometheus Operator CRDs..."
+# Installed and waited for here, before Argo CD syncs anything. Argo CD applies
+# the CRDs and the operator in one go, and an operator that starts before the
+# Prometheus CRD is being served never starts its Prometheus controller — the
+# cluster comes up with Alertmanager and Grafana but no Prometheus (seen on
+# GKE). Same field manager as Argo CD, so its later apply is not a conflict.
+KPS_VERSION="$(sed -n 's/^ *kubePrometheusStack: *//p' argocd/root/values.yaml)"
+helm show crds kube-prometheus-stack \
+  --repo https://prometheus-community.github.io/helm-charts \
+  --version "$KPS_VERSION" |
+  kubectl apply --server-side --field-manager=argocd-controller -f - >/dev/null
+kubectl get crd -o name | grep 'monitoring.coreos.com$' |
+  xargs kubectl wait --for=condition=Established --timeout=120s >/dev/null
 
 # Per-deployment facts from Terraform, as in deploy.sh — passed to the root
 # app as values instead of to helm as a file.

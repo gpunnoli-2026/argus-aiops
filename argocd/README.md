@@ -31,14 +31,17 @@ same objects.
 | `boutique` | boutique | `deploy/boutique/` |
 | `argus-platform` | aiops, mlflow | `helm/platform` + `helm/values/<cloud>/platform.yaml` + Terraform outputs; images at the synced commit |
 
-There are no sync waves. Applications that need CRDs from `monitoring` fail
-their first sync and succeed on retry.
+There are no sync waves. The bootstrap script installs the Prometheus Operator
+CRDs first, so nothing has to wait for another Application.
 
 ## What stays outside Argo CD
 
 - **Argo CD and the root Application** — installed by the bootstrap script.
 - **Namespaces and the Grafana admin secret** — the secret is generated, so it
   cannot live in git.
+- **The Prometheus Operator CRDs** — installed and waited for before the first
+  sync. An operator that starts before the Prometheus CRD is served never
+  starts its Prometheus controller. Argo CD still owns the CRDs afterwards.
 - **Terraform outputs** (bucket URI, pod identity) — the bootstrap script reads
   them and sets them as values on the root Application.
 - **One-off actions** — chaos experiments, load jobs, `make train`,
