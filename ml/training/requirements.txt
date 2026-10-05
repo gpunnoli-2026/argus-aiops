@@ -1,0 +1,5 @@
+# Keep mlflow in step with services/anomaly-detector/requirements.txt: the
+# detector unpickles the model this image saves.
+mlflow==2.20.2
+pandas==2.2.3
+requests==2.32.3
