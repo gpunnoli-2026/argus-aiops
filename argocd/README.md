@@ -19,8 +19,6 @@ same objects.
 | `argocd/values.yaml` | Values for Argo CD itself |
 | `argocd/root/` | The root app: a chart that renders one Application per component |
 | `deploy/boutique/` | Online Boutique v0.10.2, minus its public load balancer |
-| `services/kustomization.yaml` | Service code as ConfigMaps (until CI builds images) |
-| `ml/training/kustomization.yaml` | Training code ConfigMap and the nightly retrain CronJob |
 | `scripts/bootstrap-argocd.sh` | Everything that has to exist before Argo CD can take over |
 
 ## Applications
@@ -31,9 +29,7 @@ same objects.
 | `chaos-mesh` | chaos | chaos-mesh chart (controller, daemons, dashboard — not experiments) |
 | `argus-rules` | monitoring | `observability/rules/` |
 | `boutique` | boutique | `deploy/boutique/` |
-| `argus-service-code` | aiops | `services/` |
-| `argus-training` | aiops | `ml/training/` |
-| `argus-platform` | aiops, mlflow | `helm/platform` + `helm/values/<cloud>/platform.yaml` + Terraform outputs |
+| `argus-platform` | aiops, mlflow | `helm/platform` + `helm/values/<cloud>/platform.yaml` + Terraform outputs; images at the synced commit |
 
 There are no sync waves. Applications that need CRDs from `monitoring` fail
 their first sync and succeed on retry.
@@ -55,8 +51,15 @@ their first sync and succeed on retry.
 - **Argo CD deploys what is pushed.** The bootstrap script uses the current
   branch (`REVISION=<branch>` overrides) and warns when local commits are not
   on the remote.
-- **A code change does not restart a pod.** The code ConfigMaps keep fixed
-  names, so after a change to a service: `kubectl rollout restart deploy/<name> -n aiops`.
+- **Images follow the commit.** CI builds the service and trainer images for
+  every pushed commit, tagged with its SHA (`.github/workflows/images.yaml`).
+  The `argus-platform` Application sets `image.tag` to the commit it is
+  syncing, so a merge rolls out the matching images and a `git revert` rolls
+  them back. Every new commit on the tracked branch restarts the three
+  services, whatever it changed.
+- **Pods can start before their images exist.** Argo CD may sync a new commit
+  a minute or two before CI has published its images. The pull is retried and
+  the pods start once the images are there.
 - **Chaos Mesh regenerates its certificates on every render.** The
   `chaos-mesh` Application ignores those fields, otherwise each sync would
   restart its pods.

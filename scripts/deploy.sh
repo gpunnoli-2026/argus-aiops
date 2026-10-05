@@ -25,6 +25,20 @@ case "$CLOUD" in
 esac
 echo ">>> Target: $CLOUD  (context: $(kubectl config current-context))"
 
+# The services run images CI built for a specific commit
+# (.github/workflows/images.yaml), so this deploys HEAD as pushed — not the
+# working tree. IMAGE_TAG=<sha> deploys another commit's images.
+IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse HEAD)}"
+if [ -z "$(git branch -r --contains "$IMAGE_TAG" 2>/dev/null)" ]; then
+  echo "ERROR: commit $IMAGE_TAG is not on the remote, so CI has built no images for it." >&2
+  echo "       Push it and wait for the Images workflow, or set IMAGE_TAG to a pushed commit." >&2
+  exit 1
+fi
+if [ -n "$(git status --porcelain --untracked-files=no -- services ml/training)" ]; then
+  echo "WARNING: uncommitted changes under services/ or ml/training/ are not in the images."
+fi
+echo "    images: $IMAGE_TAG"
+
 echo ">>> Adding helm repos..."
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null
 helm repo add chaos-mesh https://charts.chaos-mesh.org >/dev/null
@@ -70,24 +84,7 @@ helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
 echo ">>> Argus recording & alerting rules..."
 kubectl apply -f observability/rules/
 
-echo ">>> Argus platform (MLflow, detector, forecaster, correlator)..."
-# service code rides in ConfigMaps until Phase 5 CI/CD builds real images
-kubectl -n aiops create configmap argus-detector-code \
-  --from-file=services/anomaly-detector/ \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n aiops create configmap argus-forecaster-code \
-  --from-file=services/capacity-forecaster/ \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n aiops create configmap argus-correlator-code \
-  --from-file=services/alert-correlator/ \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n aiops create configmap argus-training-code \
-  --from-file=ml/training/train_anomaly.py \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-echo ">>> Scheduled retraining (nightly, gated promotion)..."
-kubectl apply -f ml/training/retrain-cronjob.yaml
-
+echo ">>> Argus platform (MLflow, detector, forecaster, correlator, retraining)..."
 # Per-deployment facts (bucket URI, pod identity) come from Terraform as a
 # ready-made values document — deploy.sh never learns which cloud it is on.
 # Repo-relative path: MSYS_NO_PATHCONV above would mangle an absolute /tmp one.
@@ -119,6 +116,7 @@ fi
 helm upgrade --install argus helm/platform \
   --namespace aiops \
   --values "helm/values/$CLOUD/platform.yaml" \
+  --set "image.tag=$IMAGE_TAG" \
   "${EXTRA_ARGS[@]}" \
   --wait --timeout 10m
 

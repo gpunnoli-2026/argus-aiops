@@ -305,7 +305,7 @@ argus-aiops/
 ├── loadgen/                  # k6 scenarios (steady + multi-regime varied)
 ├── observability/            # recording/alerting rules, dashboards
 ├── tests/                    # unit tests over the pure logic
-├── .github/workflows/        # ci.yaml (lint, terraform fmt, unit tests)
+├── .github/workflows/        # ci.yaml (lint, tests, terraform, gitops render), images.yaml (per-commit images)
 ├── docs/                     # this file, runbooks/, plan
 └── Makefile                  # up/down/deploy/train/chaos/demo/teardown
 ```

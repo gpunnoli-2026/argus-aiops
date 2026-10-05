@@ -14,10 +14,7 @@ spec:
     spec:
       containers:
         - name: forecaster
-          image: {{ .Values.capacityForecaster.image }}
-          command: ["bash", "-c"]
-          args:
-            - pip install --quiet -r /app/requirements.txt && uvicorn main:app --app-dir /app --host 0.0.0.0 --port 8080
+          image: {{ include "argus.image" (list . "argus-capacity-forecaster") }}
           env:
             - name: PROM_URL
               value: {{ .Values.prometheusUrl }}
@@ -30,20 +27,13 @@ spec:
           ports:
             - containerPort: 8080
               name: http
-          volumeMounts:
-            - name: code
-              mountPath: /app
           resources:
             requests: { cpu: 200m, memory: 600Mi }
             limits: { memory: 1200Mi }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
-            initialDelaySeconds: 120 # prophet install is slow
+            initialDelaySeconds: 15
             periodSeconds: 20
-      volumes:
-        - name: code
-          configMap:
-            name: argus-forecaster-code
 ---
 apiVersion: v1
 kind: Service

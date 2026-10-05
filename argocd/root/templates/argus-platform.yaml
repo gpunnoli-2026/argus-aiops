@@ -20,4 +20,9 @@ spec:
       # Terraform outputs last.
       valuesObject:
         {{- toYaml .Values.platformValues | nindent 8 }}
+      # Argo CD substitutes the commit it is syncing, so the manifests and the
+      # images they run always come from the same commit.
+      parameters:
+        - name: image.tag
+          value: $ARGOCD_APP_REVISION
   {{- include "argus.syncPolicy" (list "SkipDryRunOnMissingResource=true") | nindent 2 }}
