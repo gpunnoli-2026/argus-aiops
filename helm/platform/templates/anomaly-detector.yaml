@@ -1,17 +1,8 @@
 {{- if .Values.anomalyDetector.enabled }}
-# Sandbox shortcut: runs on a stock python image, installing deps at startup and
-# mounting code from the argus-detector-code ConfigMap (created by deploy.sh).
-# Phase 5 CI/CD replaces this with a proper built image in ECR.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: anomaly-detector
-  namespace: aiops
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: retraining
   namespace: aiops
 ---
 apiVersion: apps/v1
@@ -30,10 +21,7 @@ spec:
       serviceAccountName: anomaly-detector
       containers:
         - name: detector
-          image: {{ .Values.anomalyDetector.image }}
-          command: ["bash", "-c"]
-          args:
-            - pip install --quiet -r /app/requirements.txt && uvicorn main:app --app-dir /app --host 0.0.0.0 --port 8080
+          image: {{ include "argus.image" (list . "argus-anomaly-detector") }}
           env:
             - name: PROM_URL
               value: {{ .Values.prometheusUrl }}
@@ -48,20 +36,13 @@ spec:
           ports:
             - containerPort: 8080
               name: http
-          volumeMounts:
-            - name: code
-              mountPath: /app
           resources:
             requests: { cpu: 100m, memory: 400Mi }
             limits: { memory: 800Mi }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
-            initialDelaySeconds: 60
+            initialDelaySeconds: 15
             periodSeconds: 15
-      volumes:
-        - name: code
-          configMap:
-            name: argus-detector-code
 ---
 apiVersion: v1
 kind: Service

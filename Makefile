@@ -176,10 +176,12 @@ grafana-password: ## Print the generated Grafana admin password
 ## ----- ML -----
 
 train: ## Train anomaly models on recent Prometheus data, register in MLflow
-	kubectl -n aiops create configmap argus-training-code --from-file=ml/training/train_anomaly.py \
-		--dry-run=client -o yaml | kubectl apply -f -
 	kubectl -n aiops delete job argus-train-anomaly --ignore-not-found
-	kubectl apply -f ml/training/train-job.yaml
+	@image=$$(kubectl -n aiops get cronjob argus-retrain-anomaly \
+		-o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}'); \
+	[ -n "$$image" ] || { echo "ERROR: retrain CronJob not found — deploy the platform first"; exit 1; }; \
+	echo ">>> Training with $$image"; \
+	sed "s|TRAINER_IMAGE|$$image|" ml/training/train-job.yaml | kubectl apply -f -
 	kubectl -n aiops wait --for=condition=complete --timeout=15m job/argus-train-anomaly || \
 		(kubectl -n aiops logs job/argus-train-anomaly --tail=30; exit 1)
 	kubectl -n aiops logs job/argus-train-anomaly --tail=5

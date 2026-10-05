@@ -65,14 +65,12 @@ jobs:
       - name: Render the platform chart with each cloud overlay
         run: |
           for cloud in aws gcp kind; do
-            helm template argus helm/platform --values helm/values/$cloud/platform.yaml > /dev/null
+            helm template argus helm/platform --values helm/values/$cloud/platform.yaml \
+              --set image.tag=${{ github.sha }} > /dev/null
           done
 
       - name: Build the kustomizations
-        run: |
-          for dir in services ml/training deploy/boutique; do
-            kubectl kustomize $dir > /dev/null
-          done
+        run: kubectl kustomize deploy/boutique > /dev/null
 
   terraform:
     runs-on: ubuntu-latest

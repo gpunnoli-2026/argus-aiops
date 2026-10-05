@@ -22,7 +22,7 @@ designed and next to build (see status below).
 | 2 | Anomaly detection (learned per-service baselines + MLflow) | ✅ Done |
 | 3 | Capacity forecasting (Prophet) & alert correlation | ✅ Done |
 | 4 | Slack incident workflow + gated remediation | 📋 Next |
-| 5 | MLOps hardening | 🔶 Partial — gated promotion, rollback, nightly retraining, CI, offline model evaluation on recorded chaos runs done; drift gates (Evidently) planned |
+| 5 | MLOps hardening | 🔶 Partial — gated promotion, rollback, nightly retraining, CI, per-commit image builds, GitOps deploy (Argo CD), offline model evaluation on recorded chaos runs done; drift gates (Evidently) planned |
 | 6 | Multi-cloud portability & polish | 🔶 Partial — **ported to GCP**: full platform running on GKE inside a Terraform-built landing zone, verified by a measured chaos run (results below); EKS re-measurement with the current model and polish remaining |
 
 ### Measured results (live chaos runs)
@@ -105,7 +105,7 @@ Chaos fault injected
 
 ## Stack
 
-Kubernetes (EKS · GKE) · Terraform · Helm · Prometheus/Alertmanager/Grafana · Chaos Mesh · k6 ·
+Kubernetes (EKS · GKE) · Terraform · Helm · Argo CD · Prometheus/Alertmanager/Grafana · Chaos Mesh · k6 ·
 Python · scikit-learn · Prophet · MLflow · FastAPI ·
 Anthropic Claude (RAG-grounded diagnostic narrative) · GitHub Actions ·
 *Phase 4/5:* Slack (Socket Mode) · Evidently
@@ -133,6 +133,11 @@ also checks the live kubectl context agrees.
 
 `make help` lists all targets. Local dev loop without a cloud account:
 `make kind-up && make deploy CLOUD=kind`.
+
+The Argus services run images that CI builds for every pushed commit, so a deploy
+runs the commit you are on as pushed, not uncommitted local edits.
+`make deploy-gitops CLOUD=...` deploys the same platform through Argo CD, which then
+keeps the cluster in line with the repository ([argocd/README.md](argocd/README.md)).
 
 The demo app is deployed without its public load balancer (k6 drives it in-cluster);
 `make frontend-public` creates one on demand.
