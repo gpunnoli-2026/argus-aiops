@@ -1,4 +1,4 @@
-.PHONY: help up down plan kubeconfig check-cloud check-prereqs check-context kind-up kind-down deploy frontend-public load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana grafana-password train rollback mlflow detector-logs forecaster-logs forecasts incidents scores demo test lint fmt
+.PHONY: help up down plan kubeconfig check-cloud check-prereqs check-context kind-up kind-down deploy deploy-gitops argocd argocd-password frontend-public load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana grafana-password train rollback mlflow detector-logs forecaster-logs forecasts incidents scores demo test lint fmt
 
 # CLOUD has no default on purpose: `make down` against the wrong cloud is the
 # one mistake here that is both easy to make and expensive.
@@ -84,6 +84,8 @@ down: check-cloud check-context ## Tear down ALL cloud resources — always run 
 	@echo ">>> Removing Kubernetes-created load balancers first (they block network deletion)..."
 	-kubectl get svc -A --no-headers 2>/dev/null | awk '$$3=="LoadBalancer" {print $$1, $$2}' | \
 		while read ns name; do kubectl -n $$ns delete svc $$name --timeout=60s; done
+	@echo ">>> Stopping Argo CD (if installed) so it does not recreate what is removed next..."
+	-kubectl -n argocd scale statefulset argocd-application-controller --replicas=0 --timeout=60s 2>/dev/null
 	@echo ">>> Removing PVCs (their disks outlive the cluster and keep billing)..."
 	-kubectl delete pvc -A --all --timeout=120s
 	-bash -c "sleep 60"   # wait for LB network interfaces to release (bash: portable on Windows)
@@ -118,6 +120,16 @@ kind-down: ## Delete the local kind cluster
 deploy: CLOUDS = $(CLOUDS_ALL)
 deploy: check-cloud check-context ## Deploy observability, demo app, chaos tooling, Argus services
 	CLOUD=$(CLOUD) TF_DIR=$(TF_DIR) bash scripts/deploy.sh
+
+deploy-gitops: CLOUDS = $(CLOUDS_ALL)
+deploy-gitops: check-cloud check-context ## Same deployment via Argo CD, from the pushed branch (REVISION=<branch> to override)
+	CLOUD=$(CLOUD) TF_DIR=$(TF_DIR) bash scripts/bootstrap-argocd.sh
+
+argocd: ## Port-forward the Argo CD UI to http://localhost:8081
+	kubectl -n argocd port-forward svc/argocd-server 8081:80
+
+argocd-password: ## Print the Argo CD initial admin password (user: admin)
+	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d && echo
 
 frontend-public: ## Expose the demo app via a cloud load balancer (billed; delete when done)
 	kubectl -n boutique expose deployment frontend --name=frontend-external \

@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: {{ .Values.charts.kubePrometheusStack }}
+      helm:
+        # Service names (monitoring-kube-prometheus-prometheus, monitoring-grafana)
+        # are derived from this and referenced across the platform.
+        releaseName: monitoring
+        valueFiles:
+          - $values/helm/values/monitoring.yaml
+          - $values/helm/values/{{ .Values.cloud }}/monitoring.yaml
+    - repoURL: {{ .Values.repoURL }}
+      targetRevision: {{ .Values.revision }}
+      ref: values
+  # ServerSideApply: the Prometheus CRDs are too large for the client-side
+  # last-applied annotation.
+  {{- include "argus.syncPolicy" (list "ServerSideApply=true") | nindent 2 }}

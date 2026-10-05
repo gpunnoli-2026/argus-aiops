@@ -1,0 +1,16 @@
+# Online Boutique, the demo app Argus watches.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: boutique
+resources:
+  - https://raw.githubusercontent.com/GoogleCloudPlatform/microservices-demo/v0.10.2/release/kubernetes-manifests.yaml
+patches:
+  # The upstream manifest exposes the frontend through a cloud load balancer.
+  # k6 drives the in-cluster Service, so that LB is pure cost and a public,
+  # unauthenticated surface. Opt back in: make frontend-public.
+  - patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: frontend-external
