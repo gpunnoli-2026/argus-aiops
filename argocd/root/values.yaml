@@ -1,0 +1,19 @@
+# Root app values. scripts/bootstrap-argocd.sh sets all of these on the root
+# Application; the defaults only make `helm template argocd/root` render.
+
+# Which values overlay describes this cluster: aws | gcp | kind
+cloud: kind
+
+# Where Argo CD reads this repo from. It deploys what is pushed here, never
+# the local working tree.
+repoURL: https://github.com/gpunnoli-2026/argus-aiops.git
+revision: main
+
+# Per-deployment facts from `terraform output -json helm_values` (bucket URI,
+# pod identity wiring). Empty on kind: MLflow keeps artifacts on its PVC.
+platformValues: {}
+
+# Pinned upstream charts. deploy.sh installs whatever is newest that day.
+charts:
+  kubePrometheusStack: 91.9.0
+  chaosMesh: 2.8.4

@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chaos-mesh
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: chaos
+  source:
+    repoURL: https://charts.chaos-mesh.org
+    chart: chaos-mesh
+    targetRevision: {{ .Values.charts.chaosMesh }}
+    helm:
+      releaseName: chaos-mesh
+      valuesObject:
+        chaosDaemon:
+          runtime: containerd
+          socketPath: /run/containerd/containerd.sock
+        controllerManager:
+          replicaCount: 1
+        dashboard:
+          create: true
+  {{- include "argus.syncPolicy" (list "ServerSideApply=true" "RespectIgnoreDifferences=true") | nindent 2 }}
+  # The chart generates new certificates and a random `rollme` pod annotation
+  # on every render. Left alone, each refresh would look out of sync and each
+  # sync would restart the controller and daemons under a running experiment.
+  ignoreDifferences:
+    - kind: Secret
+      jqPathExpressions:
+        - .data
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+    - group: apps
+      kind: Deployment
+      jqPathExpressions:
+        - .spec.template.metadata.annotations.rollme
+    - group: apps
+      kind: DaemonSet
+      jqPathExpressions:
+        - .spec.template.metadata.annotations.rollme

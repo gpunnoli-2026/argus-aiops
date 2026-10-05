@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argus-platform
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: aiops
+  source:
+    repoURL: {{ .Values.repoURL }}
+    targetRevision: {{ .Values.revision }}
+    path: helm/platform
+    helm:
+      releaseName: argus
+      valueFiles:
+        - ../values/{{ .Values.cloud }}/platform.yaml
+      # Same layering as deploy.sh: chart defaults, cloud overlay, then the
+      # Terraform outputs last.
+      valuesObject:
+        {{- toYaml .Values.platformValues | nindent 8 }}
+  {{- include "argus.syncPolicy" (list "SkipDryRunOnMissingResource=true") | nindent 2 }}

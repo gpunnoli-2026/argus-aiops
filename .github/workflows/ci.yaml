@@ -49,6 +49,31 @@ jobs:
       - name: Run unit tests
         run: pytest tests/ -q
 
+  gitops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No cluster: this catches a root chart or kustomization that no longer
+      # renders, which Argo CD would otherwise report only at sync time.
+      - name: Render the Argo CD root app
+        run: |
+          for cloud in aws gcp kind; do
+            helm template argus-root argocd/root --set cloud=$cloud > /dev/null
+          done
+
+      - name: Render the platform chart with each cloud overlay
+        run: |
+          for cloud in aws gcp kind; do
+            helm template argus helm/platform --values helm/values/$cloud/platform.yaml > /dev/null
+          done
+
+      - name: Build the kustomizations
+        run: |
+          for dir in services ml/training deploy/boutique; do
+            kubectl kustomize $dir > /dev/null
+          done
+
   terraform:
     runs-on: ubuntu-latest
     strategy:

@@ -1,0 +1,34 @@
+# Argo CD itself (argo-cd chart) — sized for the same small sandbox cluster as
+# everything else. Installed by scripts/bootstrap-argocd.sh, not by Argo CD.
+
+# No SSO, no notifications, no ApplicationSets: one operator, one cluster,
+# and the root app is a plain app-of-apps.
+dex:
+  enabled: false
+notifications:
+  enabled: false
+applicationSet:
+  replicas: 0
+
+configs:
+  params:
+    # The UI is reached by port-forward (make argocd), so TLS at the server
+    # only adds a certificate warning.
+    server.insecure: true
+
+controller:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 768Mi }
+repoServer:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+server:
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { memory: 256Mi }
+redis:
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { memory: 128Mi }

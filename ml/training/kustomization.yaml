@@ -1,0 +1,13 @@
+# Training code ConfigMap + the nightly retrain CronJob. train-job.yaml is
+# deliberately absent: a training run is a one-off (`make train`), not state.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aiops
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: argus-training-code
+    files:
+      - train_anomaly.py
+resources:
+  - retrain-cronjob.yaml

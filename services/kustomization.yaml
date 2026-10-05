@@ -1,0 +1,22 @@
+# Service code as ConfigMaps for the stock-python-image Deployments in
+# helm/platform. Stopgap until CI builds images.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aiops
+generatorOptions:
+  # The chart mounts these by fixed name. The cost: a code change updates the
+  # ConfigMap but does not restart the pod — `kubectl rollout restart` does.
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: argus-detector-code
+    files:
+      - anomaly-detector/main.py
+      - anomaly-detector/requirements.txt
+  - name: argus-forecaster-code
+    files:
+      - capacity-forecaster/main.py
+      - capacity-forecaster/requirements.txt
+  - name: argus-correlator-code
+    files:
+      - alert-correlator/main.py
+      - alert-correlator/requirements.txt
