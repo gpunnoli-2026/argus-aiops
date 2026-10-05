@@ -4,7 +4,9 @@
 but through Argo CD: it installs Argo CD and one root Application, and Argo CD
 then keeps the cluster in line with this repository.
 
-> Status: renders and validates offline (CI job `gitops`); not yet run on a cluster.
+> Status: verified on GKE — all eight Applications synced and healthy from a
+> clean cluster, MLflow on the Terraform-provided bucket, deleted resources
+> recreated, chaos experiments left alone. Not yet run on EKS or kind.
 
 Use one path per cluster. `make deploy` installs Helm releases; Argo CD applies
 rendered manifests. Running both on the same cluster gives two owners for the
@@ -58,5 +60,9 @@ their first sync and succeed on retry.
 - **Chaos Mesh regenerates its certificates on every render.** The
   `chaos-mesh` Application ignores those fields, otherwise each sync would
   restart its pods.
+- **Only what git states is enforced.** The upstream demo-app manifest sets no
+  `replicas`, so scaling one of its Deployments by hand is not reverted (a
+  deleted Deployment is). That also means a remediation that scales a service
+  will not be fought by Argo CD.
 - **`make down` stops Argo CD first**, so it does not recreate the volumes
   that teardown deletes.

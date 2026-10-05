@@ -18,8 +18,10 @@ configs:
 
 controller:
   resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { memory: 768Mi }
+    requests: { cpu: 100m, memory: 512Mi }
+    # 768Mi was OOMKilled twice during the first sync on GKE (the Prometheus
+    # CRDs and ~100 monitoring objects at once); it settles near 470Mi.
+    limits: { memory: 1536Mi }
 repoServer:
   resources:
     requests: { cpu: 50m, memory: 128Mi }
