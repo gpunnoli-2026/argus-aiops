@@ -44,10 +44,53 @@ jobs:
           pip install -r services/anomaly-detector/requirements.txt \
                       -r services/alert-correlator/requirements.txt \
                       -r services/capacity-forecaster/requirements.txt \
+                      -r services/diagnostic/requirements.txt \
                       pytest
 
       - name: Run unit tests
         run: pytest tests/ -q
+
+  # Builds the runbook index in a real Postgres and scores retrieval against
+  # the golden set; fails if hybrid retrieval drops below the committed baseline.
+  rag:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: argus_rag
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d argus_rag"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      RAG_MODEL_CACHE: ${{ github.workspace }}/.rag-model-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The evaluation folds its cases through the real correlator.
+      - name: Install dependencies
+        run: |
+          pip install -r services/diagnostic/requirements.txt \
+                      -r services/alert-correlator/requirements.txt
+
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: .rag-model-cache
+          key: rag-model-${{ hashFiles('services/diagnostic/embed.py') }}
+
+      - name: Build the runbook index
+        run: python services/diagnostic/ingest.py
+
+      - name: Evaluate retrieval
+        run: python services/diagnostic/eval/run_eval.py
 
   gitops:
     runs-on: ubuntu-latest

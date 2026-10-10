@@ -1,0 +1,257 @@
+# Golden set for runbook retrieval.
+#
+# Each case is the raw alerts of one incident. run_eval.py folds them through
+# the real alert-correlator, so the incident shape and the inferred root
+# service are whatever production would produce.
+#
+#   expect: a runbook id, a list of acceptable ids, or `none`
+#
+# A list means the incident alone cannot tell those runbooks apart (the
+# correlator drops the labels and annotations that would). Hand-written from
+# the alert rules and chaos experiments; not yet captured from live runs.
+
+# ---- one failure mode, one alert --------------------------------------------
+- id: single-cpu-critical
+  kind: single
+  alerts:
+    - {alertname: ServiceAnomalyDetected, service: cartservice, severity: warning}
+    - {alertname: ServiceAnomalyCritical, service: cartservice, severity: critical}
+  expect: service-cpu-saturation
+
+- id: single-restarting
+  kind: single
+  alerts:
+    - {alertname: BoutiquePodRestarting, service: recommendationservice, severity: warning}
+  expect: pod-crashloop
+
+- id: single-not-ready
+  kind: single
+  alerts:
+    - {alertname: BoutiquePodsNotReady, service: recommendationservice, severity: warning}
+  expect: pods-not-ready
+
+- id: single-memory
+  kind: single
+  alerts:
+    - {alertname: BoutiqueMemoryNearLimit, service: currencyservice, severity: warning}
+  expect: memory-near-limit
+
+- id: single-capacity-forecast
+  kind: single
+  alerts:
+    - {alertname: CapacityExhaustionForecast, severity: warning}
+  expect: node-capacity-exhaustion
+
+- id: single-capacity-imminent
+  kind: single
+  alerts:
+    - {alertname: CapacityExhaustionImminent, severity: critical}
+  expect: node-capacity-exhaustion
+
+- id: single-detector-not-scoring
+  kind: single
+  alerts:
+    - {alertname: DetectorNotScoring, severity: warning}
+  expect: detector-not-scoring
+
+- id: single-detector-no-model
+  kind: single
+  alerts:
+    - {alertname: DetectorModelMissing, severity: info}
+  expect: detector-not-scoring
+
+- id: single-forecaster
+  kind: single
+  alerts:
+    - {alertname: ForecasterNotRunning, severity: warning}
+  expect: forecaster-not-running
+
+- id: single-redis-not-ready
+  kind: single
+  alerts:
+    - {alertname: BoutiquePodsNotReady, service: redis-cart, severity: warning}
+  expect: redis-cart-unavailable
+
+# ---- several alerts folded into one incident ---------------------------------
+- id: multi-cpu-stress-cascade        # chaos/cpu-stress.yaml
+  kind: multi
+  alerts:
+    - {alertname: ServiceAnomalyDetected, service: cartservice, severity: warning}
+    - {alertname: ServiceAnomalyCritical, service: cartservice, severity: critical}
+    - {alertname: ServiceAnomalyDetected, service: checkoutservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: frontend, severity: warning}
+  expect: service-cpu-saturation
+
+- id: multi-pod-kill                  # chaos/pod-kill.yaml
+  kind: multi
+  alerts:
+    - {alertname: BoutiquePodsNotReady, service: recommendationservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: recommendationservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: frontend, severity: warning}
+  expect: pods-not-ready
+
+- id: multi-network-delay             # chaos/network-delay.yaml
+  kind: multi
+  alerts:
+    - {alertname: ServiceAnomalyDetected, service: productcatalogservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: recommendationservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: checkoutservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: frontend, severity: warning}
+  expect: dependency-latency
+
+- id: multi-oom
+  kind: multi
+  alerts:
+    - {alertname: BoutiqueMemoryNearLimit, service: currencyservice, severity: warning}
+    - {alertname: BoutiquePodRestarting, service: currencyservice, severity: warning}
+  expect: memory-near-limit
+
+- id: multi-oom-cascade
+  kind: multi
+  alerts:
+    - {alertname: BoutiqueMemoryNearLimit, service: paymentservice, severity: warning}
+    - {alertname: BoutiquePodRestarting, service: paymentservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: checkoutservice, severity: warning}
+  expect: memory-near-limit
+
+- id: multi-crashloop-cascade
+  kind: multi
+  alerts:
+    - {alertname: BoutiquePodRestarting, service: paymentservice, severity: warning}
+    - {alertname: BoutiquePodsNotReady, service: paymentservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: checkoutservice, severity: warning}
+  expect: pod-crashloop
+
+- id: multi-redis-down
+  kind: multi
+  alerts:
+    - {alertname: BoutiquePodsNotReady, service: redis-cart, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: cartservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: frontend, severity: warning}
+  expect: redis-cart-unavailable
+
+- id: multi-redis-restarting
+  kind: multi
+  alerts:
+    - {alertname: BoutiquePodRestarting, service: redis-cart, severity: warning}
+    - {alertname: BoutiquePodsNotReady, service: cartservice, severity: warning}
+  expect: redis-cart-unavailable
+
+- id: multi-capacity-escalating
+  kind: multi
+  alerts:
+    - {alertname: CapacityExhaustionForecast, severity: warning}
+    - {alertname: CapacityExhaustionImminent, severity: critical}
+  expect: node-capacity-exhaustion
+
+- id: multi-detector-down
+  kind: multi
+  alerts:
+    - {alertname: DetectorNotScoring, severity: warning}
+    - {alertname: DetectorModelMissing, severity: info}
+  expect: detector-not-scoring
+
+- id: multi-drift-unrelated-services
+  kind: multi
+  alerts:
+    - {alertname: ServiceAnomalyDetected, service: adservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: emailservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: shippingservice, severity: warning}
+  expect: anomaly-false-positive
+
+# ---- runbooks that share alerts ----------------------------------------------
+- id: confusable-restart-on-cartservice   # not the redis runbook: redis is healthy
+  kind: confusable
+  alerts:
+    - {alertname: BoutiquePodRestarting, service: cartservice, severity: warning}
+  expect: pod-crashloop
+
+- id: confusable-restart-with-anomaly
+  kind: confusable
+  alerts:
+    - {alertname: BoutiquePodRestarting, service: currencyservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: currencyservice, severity: warning}
+  expect: pod-crashloop
+
+- id: confusable-redis-oom
+  kind: confusable
+  alerts:
+    - {alertname: BoutiqueMemoryNearLimit, service: redis-cart, severity: warning}
+    - {alertname: BoutiquePodRestarting, service: redis-cart, severity: warning}
+  expect: [memory-near-limit, redis-cart-unavailable]
+
+- id: confusable-lone-anomaly            # saturation below the critical score, or drift
+  kind: confusable
+  alerts:
+    - {alertname: ServiceAnomalyDetected, service: adservice, severity: warning}
+  expect: [service-cpu-saturation, anomaly-false-positive]
+
+- id: confusable-caller-and-dependency   # slow dependency, or its CPU below critical
+  kind: confusable
+  alerts:
+    - {alertname: ServiceAnomalyDetected, service: cartservice, severity: warning}
+    - {alertname: ServiceAnomalyDetected, service: frontend, severity: warning}
+  expect: [dependency-latency, service-cpu-saturation]
+
+# ---- alerts no runbook lists, but one covers (kube-prometheus-stack alerts
+#      reach the correlator too). Only the text signals can find these.
+- id: unlisted-crashlooping
+  kind: unlisted
+  alerts:
+    - {alertname: KubePodCrashLooping, severity: warning}
+  expect: pod-crashloop
+
+- id: unlisted-pod-not-ready
+  kind: unlisted
+  alerts:
+    - {alertname: KubePodNotReady, severity: warning}
+  expect: pods-not-ready
+
+- id: unlisted-filesystem-filling
+  kind: unlisted
+  alerts:
+    - {alertname: NodeFilesystemSpaceFillingUp, severity: warning}
+  expect: node-capacity-exhaustion
+
+- id: unlisted-cpu-throttling
+  kind: unlisted
+  alerts:
+    - {alertname: CPUThrottlingHigh, severity: info}
+  expect: service-cpu-saturation
+
+- id: unlisted-oom-killed
+  kind: unlisted
+  alerts:
+    - {alertname: KubeContainerOOMKilled, severity: warning}
+  expect: memory-near-limit
+
+# ---- alerts with no runbook at all
+- id: negative-node-not-ready
+  kind: negative
+  alerts:
+    - {alertname: KubeNodeNotReady, severity: warning}
+  expect: none
+
+- id: negative-target-down
+  kind: negative
+  alerts:
+    - {alertname: TargetDown, severity: warning}
+  expect: none
+
+- id: negative-alertmanager-reload
+  kind: negative
+  alerts:
+    - {alertname: AlertmanagerFailedReload, severity: critical}
+  expect: none
+
+- id: negative-clock-skew
+  kind: negative
+  alerts:
+    - {alertname: NodeClockSkewDetected, severity: warning}
+  expect: none
+
+- id: negative-cert-expiry
+  kind: negative
+  alerts:
+    - {alertname: KubeClientCertificateExpiration, severity: warning}
+  expect: none

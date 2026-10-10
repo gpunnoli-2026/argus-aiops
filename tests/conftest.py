@@ -41,3 +41,13 @@ def train_module():
 @pytest.fixture(scope="session")
 def llm_module():
     return load_module("llm_diagnostic", "src/llm_diagnostic.py")
+
+
+@pytest.fixture(scope="session")
+def corpus_module():
+    return load_module("rag_corpus", "services/diagnostic/corpus.py")
+
+
+@pytest.fixture(scope="session")
+def retrieve_module():
+    return load_module("rag_retrieve", "services/diagnostic/retrieve.py")

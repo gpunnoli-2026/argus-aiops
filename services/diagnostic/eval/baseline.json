@@ -1,0 +1,6 @@
+{
+  "hit@1": 0.871,
+  "hit@3": 0.968,
+  "mrr": 0.919,
+  "negatives_rejected": 1.0
+}
