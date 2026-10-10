@@ -1,4 +1,4 @@
-.PHONY: help up down plan kubeconfig check-cloud check-prereqs check-context kind-up kind-down deploy deploy-gitops argocd argocd-password frontend-public load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana grafana-password train rollback mlflow detector-logs forecaster-logs forecasts incidents scores demo test lint fmt
+.PHONY: help up down plan kubeconfig check-cloud check-prereqs check-context kind-up kind-down deploy deploy-gitops argocd argocd-password frontend-public load load-varied load-stop chaos-cpu chaos-podkill chaos-latency chaos-clean grafana grafana-password train rollback mlflow detector-logs forecaster-logs forecasts incidents scores demo test lint rag-lint rag-db rag-ingest rag-eval fmt
 
 # CLOUD has no default on purpose: `make down` against the wrong cloud is the
 # one mistake here that is both easy to make and expensive.
@@ -219,6 +219,23 @@ test: ## Run the unit test suite
 
 lint: ## Lint Python services
 	ruff check services/ ml/ src/ tests/
+
+rag-lint: ## Lint the incident runbook corpus
+	python services/diagnostic/corpus.py
+
+# A throwaway local database: the password is not a secret and the data is
+# rebuilt from runbooks/ by rag-ingest.
+rag-db: ## Start a local Postgres + pgvector for the runbook index
+	-@docker rm -f argus-rag-db >/dev/null 2>&1
+	docker run -d --name argus-rag-db -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=argus_rag 		-p 5432:5432 pgvector/pgvector:pg16
+	@until docker exec argus-rag-db pg_isready -h localhost -U postgres -d argus_rag >/dev/null 2>&1; do sleep 1; done
+	@echo ">>> Postgres ready on localhost:5432"
+
+rag-ingest: ## Build the runbook index from runbooks/ (safe to re-run)
+	python services/diagnostic/ingest.py
+
+rag-eval: ## Score runbook retrieval against the golden set; fails below baseline
+	python services/diagnostic/eval/run_eval.py
 
 fmt: ## Format Terraform
 	terraform fmt -recursive terraform/

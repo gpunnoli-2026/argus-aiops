@@ -1,0 +1,4 @@
+pyyaml==6.0.3
+fastembed==0.9.0
+psycopg[binary]==3.3.6
+pgvector==0.5.1
